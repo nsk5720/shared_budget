@@ -503,6 +503,7 @@ class _BudgetShellState extends State<BudgetShell> {
       await userReference.set({
         'email': user.email,
         'inviteCode': user.uid.substring(0, 8).toUpperCase(),
+        'appBuild': '2026.07.31.1',
         'lastLoginAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
