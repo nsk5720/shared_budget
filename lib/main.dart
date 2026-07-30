@@ -559,10 +559,11 @@ class _BudgetShellState extends State<BudgetShell> {
               }
             },
           );
-    } on FirebaseException {
+    } on FirebaseException catch (error) {
+      debugPrint('Firestore connection failed: ${error.code} ${error.message}');
       if (mounted) {
         setState(() => _loadingTransactions = false);
-        _showMessage('Firestore 데이터베이스 설정을 확인해 주세요.');
+        _showMessage(_firestoreErrorMessage(error));
       }
     }
   }
@@ -652,9 +653,12 @@ class _BudgetShellState extends State<BudgetShell> {
           _showMessage('거래가 저장되었습니다.');
         }
         return true;
-      } on FirebaseException {
+      } on FirebaseException catch (error) {
+        debugPrint(
+          'Firestore transaction save failed: ${error.code} ${error.message}',
+        );
         if (mounted) {
-          _showMessage('저장하지 못했습니다. 인터넷 연결을 확인해 주세요.');
+          _showMessage(_firestoreErrorMessage(error));
         }
         return false;
       }
@@ -707,6 +711,16 @@ class _BudgetShellState extends State<BudgetShell> {
       ),
     );
   }
+}
+
+String _firestoreErrorMessage(FirebaseException error) {
+  return switch (error.code) {
+    'permission-denied' => '저장 권한이 없습니다. Firestore 보안 규칙을 확인해 주세요.',
+    'unavailable' => 'Firebase에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.',
+    'not-found' => 'Firestore 데이터베이스가 아직 생성되지 않았습니다.',
+    'unauthenticated' => '로그인이 만료되었습니다. 다시 로그인해 주세요.',
+    _ => '저장하지 못했습니다. 오류: ${error.code}',
+  };
 }
 
 class HomePage extends StatelessWidget {
@@ -1104,6 +1118,30 @@ class TogetherPage extends StatelessWidget {
 
   final User user;
 
+  Future<void> _confirmSignOut(BuildContext context) async {
+    final shouldSignOut = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('로그아웃'),
+        content: const Text('현재 계정에서 로그아웃할까요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('로그아웃'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldSignOut == true) {
+      await FirebaseAuth.instance.signOut();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -1113,11 +1151,22 @@ class TogetherPage extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 12),
-            Text(
-              '함께쓰기',
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '함께쓰기',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                IconButton.filledTonal(
+                  onPressed: () => _confirmSignOut(context),
+                  icon: const Icon(Icons.logout_rounded),
+                  tooltip: '로그아웃',
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             const Text(
@@ -1126,88 +1175,94 @@ class TogetherPage extends StatelessWidget {
             ),
             const SizedBox(height: 28),
             Expanded(
-              child: Center(
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(28),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 76,
-                        height: 76,
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primaryContainer,
-                          shape: BoxShape.circle,
+              child: SingleChildScrollView(
+                child: Center(
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(28),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 76,
+                          height: 76,
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.primaryContainer,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.group_add_rounded,
+                            size: 34,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
                         ),
-                        child: Icon(
-                          Icons.group_add_rounded,
-                          size: 34,
-                          color: Theme.of(context).colorScheme.primary,
+                        const SizedBox(height: 20),
+                        const Text(
+                          '아직 함께하는 사람이 없어요',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 20),
-                      const Text(
-                        '아직 함께하는 사람이 없어요',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
+                        const SizedBox(height: 8),
+                        const Text(
+                          '다음 단계에서 초대 코드와\n승인 기능을 연결할 예정입니다.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Color(0xFF6B7280),
+                            height: 1.5,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        '다음 단계에서 초대 코드와\n승인 기능을 연결할 예정입니다.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Color(0xFF6B7280), height: 1.5),
-                      ),
-                      const SizedBox(height: 20),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF3F4F6),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.key_rounded, size: 18),
-                            const SizedBox(width: 8),
-                            Text(
-                              '내 초대 코드: '
-                              '${user.uid.substring(0, 8).toUpperCase()}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
+                        const SizedBox(height: 20),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF3F4F6),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.key_rounded, size: 18),
+                              const SizedBox(width: 8),
+                              Text(
+                                '내 초대 코드: '
+                                '${user.uid.substring(0, 8).toUpperCase()}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      FilledButton.icon(
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Firebase 연결 후 사용할 수 있어요.'),
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.person_add_alt_1_rounded),
-                        label: const Text('초대하기'),
-                      ),
-                      const SizedBox(height: 8),
-                      TextButton.icon(
-                        onPressed: () => FirebaseAuth.instance.signOut(),
-                        icon: const Icon(Icons.logout_rounded),
-                        label: Text('${user.email ?? '사용자'} 로그아웃'),
-                      ),
-                    ],
+                        const SizedBox(height: 12),
+                        FilledButton.icon(
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Firebase 연결 후 사용할 수 있어요.'),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.person_add_alt_1_rounded),
+                          label: const Text('초대하기'),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          user.email ?? '사용자',
+                          style: const TextStyle(color: Color(0xFF6B7280)),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
