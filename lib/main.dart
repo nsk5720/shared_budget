@@ -1,7 +1,16 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-void main() {
+import 'firebase_options.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const SharedBudgetApp());
 }
 
@@ -49,9 +58,258 @@ class SharedBudgetApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const BudgetShell(),
+      home: const AuthGate(),
     );
   }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final user = snapshot.data;
+        if (user == null) {
+          return const LoginPage();
+        }
+        return BudgetShell(user: user);
+      },
+    );
+  }
+}
+
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isSignUp = false;
+  bool _isLoading = false;
+  bool _obscurePassword = true;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate() || _isLoading) {
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final email = _emailController.text.trim();
+      final password = _passwordController.text;
+      if (_isSignUp) {
+        final credential = await FirebaseAuth.instance
+            .createUserWithEmailAndPassword(email: email, password: password);
+        final user = credential.user!;
+        final inviteCode = user.uid.substring(0, 8).toUpperCase();
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'email': email,
+          'inviteCode': inviteCode,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+      }
+    } on FirebaseAuthException catch (error) {
+      if (mounted) {
+        setState(() => _errorMessage = _authErrorMessage(error.code));
+      }
+    } on FirebaseException {
+      if (mounted) {
+        setState(() => _errorMessage = 'Firebase 설정을 확인해 주세요.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 430),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      width: 76,
+                      height: 76,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.account_balance_wallet_rounded,
+                        size: 36,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    Text(
+                      _isSignUp ? '우리 가계부 시작하기' : '다시 만나서 반가워요',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _isSignUp
+                          ? '계정을 만들고 가계부를 안전하게 저장하세요.'
+                          : '로그인하고 저장된 가계부를 불러오세요.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFF6B7280)),
+                    ),
+                    const SizedBox(height: 32),
+                    TextFormField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(
+                        labelText: '이메일',
+                        prefixIcon: Icon(Icons.email_outlined),
+                      ),
+                      validator: (value) {
+                        if (value == null ||
+                            !RegExp(r'^[^@]+@[^@]+\.[^@]+$').hasMatch(value)) {
+                          return '올바른 이메일을 입력해 주세요.';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _passwordController,
+                      obscureText: _obscurePassword,
+                      textInputAction: TextInputAction.done,
+                      onFieldSubmitted: (_) => _submit(),
+                      decoration: InputDecoration(
+                        labelText: '비밀번호',
+                        prefixIcon: const Icon(Icons.lock_outline_rounded),
+                        suffixIcon: IconButton(
+                          onPressed: () {
+                            setState(
+                              () => _obscurePassword = !_obscurePassword,
+                            );
+                          },
+                          icon: Icon(
+                            _obscurePassword
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                          ),
+                        ),
+                      ),
+                      validator: (value) {
+                        if (value == null || value.length < 6) {
+                          return '비밀번호는 6자 이상 입력해 주세요.';
+                        }
+                        return null;
+                      },
+                    ),
+                    if (_errorMessage != null) ...[
+                      const SizedBox(height: 14),
+                      Text(
+                        _errorMessage!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Color(0xFFEF4444)),
+                      ),
+                    ],
+                    const SizedBox(height: 22),
+                    SizedBox(
+                      height: 54,
+                      child: FilledButton(
+                        onPressed: _isLoading ? null : _submit,
+                        child: _isLoading
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                _isSignUp ? '회원가입' : '로그인',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextButton(
+                      onPressed: _isLoading
+                          ? null
+                          : () {
+                              setState(() {
+                                _isSignUp = !_isSignUp;
+                                _errorMessage = null;
+                              });
+                            },
+                      child: Text(
+                        _isSignUp ? '이미 계정이 있나요? 로그인' : '처음이신가요? 회원가입',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _authErrorMessage(String code) {
+  return switch (code) {
+    'email-already-in-use' => '이미 가입된 이메일입니다.',
+    'invalid-email' => '올바른 이메일을 입력해 주세요.',
+    'weak-password' => '조금 더 안전한 비밀번호를 사용해 주세요.',
+    'invalid-credential' => '이메일 또는 비밀번호가 맞지 않습니다.',
+    'user-not-found' => '가입되지 않은 이메일입니다.',
+    'wrong-password' => '비밀번호가 맞지 않습니다.',
+    'network-request-failed' => '인터넷 연결을 확인해 주세요.',
+    _ => '로그인 중 문제가 발생했습니다. 다시 시도해 주세요.',
+  };
 }
 
 enum TransactionType { expense, income }
@@ -74,6 +332,19 @@ class BudgetTransaction {
   final TransactionType type;
   final DateTime date;
   final String memo;
+
+  Map<String, Object?> toFirestore(String userId) {
+    return {
+      'title': title,
+      'category': category,
+      'amount': amount,
+      'type': type.name,
+      'date': Timestamp.fromDate(date),
+      'memo': memo,
+      'createdBy': userId,
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+  }
 }
 
 class SmsTransactionDraft {
@@ -184,7 +455,9 @@ class SmsPlatformService {
 }
 
 class BudgetShell extends StatefulWidget {
-  const BudgetShell({super.key});
+  const BudgetShell({super.key, required this.user});
+
+  final User user;
 
   @override
   State<BudgetShell> createState() => _BudgetShellState();
@@ -193,38 +466,19 @@ class BudgetShell extends StatefulWidget {
 class _BudgetShellState extends State<BudgetShell> {
   int _currentIndex = 0;
   bool _checkingSms = false;
+  bool _loadingTransactions = true;
   String? _lastPresentedSms;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+  _transactionSubscription;
 
-  final List<BudgetTransaction> _transactions = [
-    BudgetTransaction(
-      id: '1',
-      title: '월급',
-      category: '급여',
-      amount: 3200000,
-      type: TransactionType.income,
-      date: DateTime(2026, 7, 25),
-    ),
-    BudgetTransaction(
-      id: '2',
-      title: '이마트',
-      category: '식비',
-      amount: 68500,
-      type: TransactionType.expense,
-      date: DateTime(2026, 7, 29, 19, 20),
-    ),
-    BudgetTransaction(
-      id: '3',
-      title: '스타벅스',
-      category: '카페',
-      amount: 5800,
-      type: TransactionType.expense,
-      date: DateTime(2026, 7, 30, 14, 20),
-    ),
-  ];
+  final List<BudgetTransaction> _transactions = [];
+
+  String get _ledgerId => 'personal_${widget.user.uid}';
 
   @override
   void initState() {
     super.initState();
+    _connectFirestore();
     SmsPlatformService.setNotificationTapHandler(() async {
       _lastPresentedSms = null;
       await _checkPendingSms();
@@ -237,6 +491,92 @@ class _BudgetShellState extends State<BudgetShell> {
         // iOS와 위젯 테스트에서는 Android 문자 채널을 사용하지 않습니다.
       }
     });
+  }
+
+  Future<void> _connectFirestore() async {
+    final database = FirebaseFirestore.instance;
+    final user = widget.user;
+    final userReference = database.collection('users').doc(user.uid);
+    final ledgerReference = database.collection('ledgers').doc(_ledgerId);
+
+    try {
+      final userSnapshot = await userReference.get();
+      if (!userSnapshot.exists) {
+        await userReference.set({
+          'email': user.email,
+          'inviteCode': user.uid.substring(0, 8).toUpperCase(),
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      final ledgerSnapshot = await ledgerReference.get();
+      if (!ledgerSnapshot.exists) {
+        await ledgerReference.set({
+          'name': '내 가계부',
+          'memberIds': [user.uid],
+          'createdBy': user.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      _transactionSubscription = ledgerReference
+          .collection('transactions')
+          .orderBy('date', descending: true)
+          .snapshots()
+          .listen(
+            (snapshot) {
+              final transactions = snapshot.docs.map((document) {
+                final data = document.data();
+                final timestamp = data['date'];
+                return BudgetTransaction(
+                  id: document.id,
+                  title: data['title'] as String? ?? '이름 없음',
+                  category: data['category'] as String? ?? '기타',
+                  amount: (data['amount'] as num?)?.toInt() ?? 0,
+                  type: data['type'] == TransactionType.income.name
+                      ? TransactionType.income
+                      : TransactionType.expense,
+                  date: timestamp is Timestamp
+                      ? timestamp.toDate()
+                      : DateTime.now(),
+                  memo: data['memo'] as String? ?? '',
+                );
+              }).toList();
+
+              if (mounted) {
+                setState(() {
+                  _transactions
+                    ..clear()
+                    ..addAll(transactions);
+                  _loadingTransactions = false;
+                });
+              }
+            },
+            onError: (_) {
+              if (mounted) {
+                setState(() => _loadingTransactions = false);
+                _showMessage('거래 내역을 불러오지 못했습니다.');
+              }
+            },
+          );
+    } on FirebaseException {
+      if (mounted) {
+        setState(() => _loadingTransactions = false);
+        _showMessage('Firestore 데이터베이스 설정을 확인해 주세요.');
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _transactionSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _checkPendingSms() async {
@@ -288,10 +628,12 @@ class _BudgetShellState extends State<BudgetShell> {
     }
   }
 
-  void _addTransaction(BudgetTransaction transaction) {
-    setState(() {
-      _transactions.insert(0, transaction);
-    });
+  Future<void> _addTransaction(BudgetTransaction transaction) async {
+    await FirebaseFirestore.instance
+        .collection('ledgers')
+        .doc(_ledgerId)
+        .collection('transactions')
+        .add(transaction.toFirestore(widget.user.uid));
   }
 
   Future<bool> _openAddTransaction({SmsTransactionDraft? draft}) async {
@@ -304,13 +646,18 @@ class _BudgetShellState extends State<BudgetShell> {
     );
 
     if (result != null) {
-      _addTransaction(result);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('거래가 저장되었습니다.')));
+      try {
+        await _addTransaction(result);
+        if (mounted) {
+          _showMessage('거래가 저장되었습니다.');
+        }
+        return true;
+      } on FirebaseException {
+        if (mounted) {
+          _showMessage('저장하지 못했습니다. 인터넷 연결을 확인해 주세요.');
+        }
+        return false;
       }
-      return true;
     }
     return false;
   }
@@ -318,9 +665,12 @@ class _BudgetShellState extends State<BudgetShell> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      HomePage(transactions: _transactions),
-      TransactionsPage(transactions: _transactions),
-      const TogetherPage(),
+      HomePage(transactions: _transactions, isLoading: _loadingTransactions),
+      TransactionsPage(
+        transactions: _transactions,
+        isLoading: _loadingTransactions,
+      ),
+      TogetherPage(user: widget.user),
     ];
 
     return Scaffold(
@@ -360,18 +710,23 @@ class _BudgetShellState extends State<BudgetShell> {
 }
 
 class HomePage extends StatelessWidget {
-  const HomePage({super.key, required this.transactions});
+  const HomePage({
+    super.key,
+    required this.transactions,
+    required this.isLoading,
+  });
 
   final List<BudgetTransaction> transactions;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
     final income = transactions
         .where((item) => item.type == TransactionType.income)
-        .fold<int>(0, (sum, item) => sum + item.amount);
+        .fold<int>(0, (total, item) => total + item.amount);
     final expense = transactions
         .where((item) => item.type == TransactionType.expense)
-        .fold<int>(0, (sum, item) => sum + item.amount);
+        .fold<int>(0, (total, item) => total + item.amount);
 
     return SafeArea(
       child: CustomScrollView(
@@ -407,7 +762,14 @@ class HomePage extends StatelessWidget {
           ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
-            sliver: transactions.isEmpty
+            sliver: isLoading
+                ? const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.all(36),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                  )
+                : transactions.isEmpty
                 ? const SliverToBoxAdapter(child: _EmptyTransactions())
                 : SliverList.separated(
                     itemCount: transactions.take(5).length,
@@ -588,9 +950,14 @@ class _SummaryItem extends StatelessWidget {
 }
 
 class TransactionsPage extends StatelessWidget {
-  const TransactionsPage({super.key, required this.transactions});
+  const TransactionsPage({
+    super.key,
+    required this.transactions,
+    required this.isLoading,
+  });
 
   final List<BudgetTransaction> transactions;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -612,7 +979,11 @@ class TransactionsPage extends StatelessWidget {
               const SizedBox(width: 8),
             ],
           ),
-          if (transactions.isEmpty)
+          if (isLoading)
+            const SliverFillRemaining(
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (transactions.isEmpty)
             const SliverPadding(
               padding: EdgeInsets.all(20),
               sliver: SliverToBoxAdapter(child: _EmptyTransactions()),
@@ -729,7 +1100,9 @@ class _EmptyTransactions extends StatelessWidget {
 }
 
 class TogetherPage extends StatelessWidget {
-  const TogetherPage({super.key});
+  const TogetherPage({super.key, required this.user});
+
+  final User user;
 
   @override
   Widget build(BuildContext context) {
@@ -792,6 +1165,31 @@ class TogetherPage extends StatelessWidget {
                         style: TextStyle(color: Color(0xFF6B7280), height: 1.5),
                       ),
                       const SizedBox(height: 20),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.key_rounded, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              '내 초대 코드: '
+                              '${user.uid.substring(0, 8).toUpperCase()}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       FilledButton.icon(
                         onPressed: () {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -802,6 +1200,12 @@ class TogetherPage extends StatelessWidget {
                         },
                         icon: const Icon(Icons.person_add_alt_1_rounded),
                         label: const Text('초대하기'),
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton.icon(
+                        onPressed: () => FirebaseAuth.instance.signOut(),
+                        icon: const Icon(Icons.logout_rounded),
+                        label: Text('${user.email ?? '사용자'} 로그아웃'),
                       ),
                     ],
                   ),

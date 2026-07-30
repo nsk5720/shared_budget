@@ -1,20 +1,20 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_budget/main.dart';
 
 void main() {
-  testWidgets('가계부 홈과 거래 추가 화면이 표시된다', (tester) async {
-    await tester.pumpWidget(const SharedBudgetApp());
+  testWidgets('로그인과 회원가입 화면을 전환한다', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: LoginPage()));
 
-    expect(find.text('우리 가계부'), findsOneWidget);
-    expect(find.text('7월 남은 금액'), findsOneWidget);
-    expect(find.text('내역 추가'), findsOneWidget);
+    expect(find.text('로그인'), findsOneWidget);
+    expect(find.text('이메일'), findsOneWidget);
+    expect(find.text('비밀번호'), findsOneWidget);
 
-    await tester.tap(find.text('내역 추가'));
+    await tester.tap(find.text('처음이신가요? 회원가입'));
     await tester.pumpAndSettle();
 
-    expect(find.text('저장하기'), findsOneWidget);
-    expect(find.text('사용처'), findsOneWidget);
-    expect(find.text('금액'), findsOneWidget);
+    expect(find.text('회원가입'), findsOneWidget);
+    expect(find.text('우리 가계부 시작하기'), findsOneWidget);
   });
 
   test('금액에 천 단위 쉼표를 넣는다', () {

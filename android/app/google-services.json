@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "903179660867",
+    "project_id": "shared-budget-46538",
+    "storage_bucket": "shared-budget-46538.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:903179660867:android:1dcd87580cb916fb9f2ef6",
+        "android_client_info": {
+          "package_name": "com.solomon.sharedledger.shared_budget"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAmjarBoh6YpBFbwNUfHtuonEYBvp7iw68"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
