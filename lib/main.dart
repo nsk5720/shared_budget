@@ -500,24 +500,18 @@ class _BudgetShellState extends State<BudgetShell> {
     final ledgerReference = database.collection('ledgers').doc(_ledgerId);
 
     try {
-      final userSnapshot = await userReference.get();
-      if (!userSnapshot.exists) {
-        await userReference.set({
-          'email': user.email,
-          'inviteCode': user.uid.substring(0, 8).toUpperCase(),
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-      }
+      await userReference.set({
+        'email': user.email,
+        'inviteCode': user.uid.substring(0, 8).toUpperCase(),
+        'lastLoginAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
-      final ledgerSnapshot = await ledgerReference.get();
-      if (!ledgerSnapshot.exists) {
-        await ledgerReference.set({
-          'name': '내 가계부',
-          'memberIds': [user.uid],
-          'createdBy': user.uid,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-      }
+      await ledgerReference.set({
+        'name': '내 가계부',
+        'memberIds': [user.uid],
+        'createdBy': user.uid,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
       _transactionSubscription = ledgerReference
           .collection('transactions')
