@@ -475,14 +475,16 @@ class _BudgetShellState extends State<BudgetShell> {
   String? _lastPresentedSms;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _transactionSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ledgerSubscription;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
   _categorySubscription;
 
   final List<BudgetTransaction> _transactions = [];
   List<String> _expenseCategories = [...defaultExpenseCategories];
   List<String> _incomeCategories = [...defaultIncomeCategories];
-
-  String get _ledgerId => 'personal_${widget.user.uid}';
+  String _ledgerId = '';
+  String _ledgerName = '내 가계부';
+  List<String> _ledgerMemberEmails = [];
 
   @override
   void initState() {
@@ -505,20 +507,31 @@ class _BudgetShellState extends State<BudgetShell> {
   Future<void> _connectFirestore() async {
     final database = FirebaseFirestore.instance;
     final user = widget.user;
+    final inviteCode = user.uid.substring(0, 8).toUpperCase();
+    final personalLedgerId = 'personal_${user.uid}';
     final userReference = database.collection('users').doc(user.uid);
-    final ledgerReference = database.collection('ledgers').doc(_ledgerId);
+    final ledgerReference = database
+        .collection('ledgers')
+        .doc(personalLedgerId);
 
     try {
       await userReference.set({
         'email': user.email,
-        'inviteCode': user.uid.substring(0, 8).toUpperCase(),
-        'appBuild': '2026.07.31.1',
+        'inviteCode': inviteCode,
+        'appBuild': '2026.07.31.2',
         'lastLoginAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      await database.collection('inviteCodes').doc(inviteCode).set({
+        'userId': user.uid,
+        'email': user.email,
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
       await ledgerReference.set({
         'name': '내 가계부',
         'memberIds': [user.uid],
+        'memberEmails': [user.email],
         'createdBy': user.uid,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -532,64 +545,16 @@ class _BudgetShellState extends State<BudgetShell> {
           'incomeCategories': defaultIncomeCategories,
         });
       }
-      _categorySubscription = ledgerReference.snapshots().listen((snapshot) {
-        final data = snapshot.data();
-        if (data == null || !mounted) {
-          return;
-        }
-        final expenses = (data['expenseCategories'] as List<dynamic>?)
-            ?.whereType<String>()
-            .toList();
-        final incomes = (data['incomeCategories'] as List<dynamic>?)
-            ?.whereType<String>()
-            .toList();
-        setState(() {
-          _expenseCategories = expenses == null || expenses.isEmpty
-              ? [...defaultExpenseCategories]
-              : expenses;
-          _incomeCategories = incomes == null || incomes.isEmpty
-              ? [...defaultIncomeCategories]
-              : incomes;
-        });
-      });
-
-      _transactionSubscription = ledgerReference
-          .collection('transactions')
-          .orderBy('date', descending: true)
+      _ledgerSubscription = database
+          .collection('ledgers')
+          .where('memberIds', arrayContains: user.uid)
           .snapshots()
           .listen(
-            (snapshot) {
-              final transactions = snapshot.docs.map((document) {
-                final data = document.data();
-                final timestamp = data['date'];
-                return BudgetTransaction(
-                  id: document.id,
-                  title: data['title'] as String? ?? '이름 없음',
-                  category: data['category'] as String? ?? '기타',
-                  amount: (data['amount'] as num?)?.toInt() ?? 0,
-                  type: data['type'] == TransactionType.income.name
-                      ? TransactionType.income
-                      : TransactionType.expense,
-                  date: timestamp is Timestamp
-                      ? timestamp.toDate()
-                      : DateTime.now(),
-                  memo: data['memo'] as String? ?? '',
-                );
-              }).toList();
-
-              if (mounted) {
-                setState(() {
-                  _transactions
-                    ..clear()
-                    ..addAll(transactions);
-                  _loadingTransactions = false;
-                });
-              }
-            },
-            onError: (_) {
+            _selectActiveLedger,
+            onError: (Object error) {
               if (mounted) {
                 setState(() => _loadingTransactions = false);
-                _showMessage('거래 내역을 불러오지 못했습니다.');
+                _showMessage('사용할 가계부를 불러오지 못했습니다.');
               }
             },
           );
@@ -602,9 +567,146 @@ class _BudgetShellState extends State<BudgetShell> {
     }
   }
 
+  void _selectActiveLedger(QuerySnapshot<Map<String, dynamic>> snapshot) {
+    if (snapshot.docs.isEmpty) {
+      return;
+    }
+
+    final sharedLedgers =
+        snapshot.docs
+            .where((document) => document.id.startsWith('shared_'))
+            .toList()
+          ..sort((a, b) {
+            final aDate = a.data()['updatedAt'];
+            final bDate = b.data()['updatedAt'];
+            final aMilliseconds = aDate is Timestamp
+                ? aDate.millisecondsSinceEpoch
+                : 0;
+            final bMilliseconds = bDate is Timestamp
+                ? bDate.millisecondsSinceEpoch
+                : 0;
+            return bMilliseconds.compareTo(aMilliseconds);
+          });
+
+    final personalLedgerId = 'personal_${widget.user.uid}';
+    final selected = sharedLedgers.isNotEmpty
+        ? sharedLedgers.first
+        : snapshot.docs.firstWhere(
+            (document) => document.id == personalLedgerId,
+            orElse: () => snapshot.docs.first,
+          );
+    _activateLedger(selected);
+  }
+
+  void _activateLedger(DocumentSnapshot<Map<String, dynamic>> ledgerDocument) {
+    final data = ledgerDocument.data() ?? {};
+    final memberEmails =
+        (data['memberEmails'] as List<dynamic>?)
+            ?.whereType<String>()
+            .toList() ??
+        [];
+
+    if (_ledgerId == ledgerDocument.id) {
+      if (mounted) {
+        setState(() {
+          _ledgerName = data['name'] as String? ?? '우리 가계부';
+          _ledgerMemberEmails = memberEmails;
+        });
+      }
+      return;
+    }
+
+    _transactionSubscription?.cancel();
+    _categorySubscription?.cancel();
+    _ledgerId = ledgerDocument.id;
+
+    if (mounted) {
+      setState(() {
+        _ledgerName = data['name'] as String? ?? '우리 가계부';
+        _ledgerMemberEmails = memberEmails;
+        _loadingTransactions = true;
+        _transactions.clear();
+      });
+    }
+
+    final ledgerReference = FirebaseFirestore.instance
+        .collection('ledgers')
+        .doc(_ledgerId);
+
+    _categorySubscription = ledgerReference.snapshots().listen((snapshot) {
+      final ledgerData = snapshot.data();
+      if (ledgerData == null || !mounted) {
+        return;
+      }
+      final expenses = (ledgerData['expenseCategories'] as List<dynamic>?)
+          ?.whereType<String>()
+          .toList();
+      final incomes = (ledgerData['incomeCategories'] as List<dynamic>?)
+          ?.whereType<String>()
+          .toList();
+      final emails =
+          (ledgerData['memberEmails'] as List<dynamic>?)
+              ?.whereType<String>()
+              .toList() ??
+          [];
+      setState(() {
+        _ledgerName = ledgerData['name'] as String? ?? '우리 가계부';
+        _ledgerMemberEmails = emails;
+        _expenseCategories = expenses == null || expenses.isEmpty
+            ? [...defaultExpenseCategories]
+            : expenses;
+        _incomeCategories = incomes == null || incomes.isEmpty
+            ? [...defaultIncomeCategories]
+            : incomes;
+      });
+    });
+
+    _transactionSubscription = ledgerReference
+        .collection('transactions')
+        .orderBy('date', descending: true)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            final transactions = snapshot.docs.map((document) {
+              final transactionData = document.data();
+              final timestamp = transactionData['date'];
+              return BudgetTransaction(
+                id: document.id,
+                title: transactionData['title'] as String? ?? '이름 없음',
+                category: transactionData['category'] as String? ?? '기타',
+                amount: (transactionData['amount'] as num?)?.toInt() ?? 0,
+                type: transactionData['type'] == TransactionType.income.name
+                    ? TransactionType.income
+                    : TransactionType.expense,
+                date: timestamp is Timestamp
+                    ? timestamp.toDate()
+                    : DateTime.now(),
+                memo: transactionData['memo'] as String? ?? '',
+              );
+            }).toList();
+
+            if (mounted) {
+              setState(() {
+                _transactions
+                  ..clear()
+                  ..addAll(transactions);
+                _loadingTransactions = false;
+              });
+            }
+          },
+          onError: (Object error) {
+            if (mounted) {
+              setState(() => _loadingTransactions = false);
+              _showMessage('거래 내역을 불러오지 못했습니다.');
+            }
+          },
+        );
+  }
+
   @override
   void dispose() {
     _transactionSubscription?.cancel();
+    _ledgerSubscription?.cancel();
     _categorySubscription?.cancel();
     super.dispose();
   }
@@ -665,6 +767,9 @@ class _BudgetShellState extends State<BudgetShell> {
   }
 
   Future<void> _addTransaction(BudgetTransaction transaction) async {
+    if (_ledgerId.isEmpty) {
+      throw FirebaseException(plugin: 'cloud_firestore', code: 'unavailable');
+    }
     await FirebaseFirestore.instance
         .collection('ledgers')
         .doc(_ledgerId)
@@ -743,7 +848,13 @@ class _BudgetShellState extends State<BudgetShell> {
         transactions: _transactions,
         isLoading: _loadingTransactions,
       ),
-      TogetherPage(user: widget.user, onManageCategories: _openCategoryManager),
+      TogetherPage(
+        user: widget.user,
+        onManageCategories: _openCategoryManager,
+        ledgerId: _ledgerId,
+        ledgerName: _ledgerName,
+        memberEmails: _ledgerMemberEmails,
+      ),
     ];
 
     return Scaffold(
@@ -1861,15 +1972,40 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
   }
 }
 
-class TogetherPage extends StatelessWidget {
+class TogetherPage extends StatefulWidget {
   const TogetherPage({
     super.key,
     required this.user,
     required this.onManageCategories,
+    required this.ledgerId,
+    required this.ledgerName,
+    required this.memberEmails,
   });
 
   final User user;
   final VoidCallback onManageCategories;
+  final String ledgerId;
+  final String ledgerName;
+  final List<String> memberEmails;
+
+  @override
+  State<TogetherPage> createState() => _TogetherPageState();
+}
+
+class _TogetherPageState extends State<TogetherPage> {
+  bool _isWorking = false;
+
+  bool get _isShared => widget.ledgerId.startsWith('shared_');
+  String get _inviteCode => widget.user.uid.substring(0, 8).toUpperCase();
+
+  void _showMessage(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   Future<void> _confirmSignOut(BuildContext context) async {
     final shouldSignOut = await showDialog<bool>(
@@ -1895,8 +2031,373 @@ class TogetherPage extends StatelessWidget {
     }
   }
 
+  Future<void> _openInviteDialog() async {
+    if (_isShared || _isWorking) {
+      return;
+    }
+
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('초대 코드 입력'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          maxLength: 8,
+          decoration: const InputDecoration(
+            hintText: '예: 7ALDDPRJ',
+            prefixIcon: Icon(Icons.key_rounded),
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              Navigator.of(dialogContext).pop(value);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) {
+                Navigator.of(dialogContext).pop(value);
+              }
+            },
+            child: const Text('요청 보내기'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (code != null) {
+      await _sendInvitation(code);
+    }
+  }
+
+  Future<void> _sendInvitation(String rawCode) async {
+    final code = rawCode.replaceAll(' ', '').toUpperCase();
+    if (code == _inviteCode) {
+      _showMessage('내 초대 코드는 입력할 수 없습니다.');
+      return;
+    }
+    if (code.length != 8) {
+      _showMessage('8자리 초대 코드를 확인해 주세요.');
+      return;
+    }
+
+    setState(() => _isWorking = true);
+    try {
+      final database = FirebaseFirestore.instance;
+      final targetSnapshot = await database
+          .collection('inviteCodes')
+          .doc(code)
+          .get();
+      final targetData = targetSnapshot.data();
+      final receiverId = targetData?['userId'] as String?;
+      final receiverEmail = targetData?['email'] as String?;
+
+      if (receiverId == null || receiverId.isEmpty) {
+        _showMessage('해당 초대 코드를 찾을 수 없습니다.');
+        return;
+      }
+      if (receiverId == widget.user.uid) {
+        _showMessage('내 초대 코드는 입력할 수 없습니다.');
+        return;
+      }
+
+      final invitations = database.collection('invitations');
+      final snapshots = await Future.wait([
+        invitations.where('senderId', isEqualTo: widget.user.uid).get(),
+        invitations.where('receiverId', isEqualTo: widget.user.uid).get(),
+      ]);
+      final hasPendingRequest = snapshots
+          .expand((snapshot) => snapshot.docs)
+          .any((document) {
+            final data = document.data();
+            final isSamePair =
+                (data['senderId'] == widget.user.uid &&
+                    data['receiverId'] == receiverId) ||
+                (data['senderId'] == receiverId &&
+                    data['receiverId'] == widget.user.uid);
+            return isSamePair && data['status'] == 'pending';
+          });
+      if (hasPendingRequest) {
+        _showMessage('이미 두 사람 사이에 대기 중인 요청이 있습니다.');
+        return;
+      }
+
+      await invitations.add({
+        'senderId': widget.user.uid,
+        'senderEmail': widget.user.email,
+        'senderInviteCode': _inviteCode,
+        'receiverId': receiverId,
+        'receiverEmail': receiverEmail,
+        'receiverInviteCode': code,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      _showMessage('함께쓰기 요청을 보냈습니다.');
+    } on FirebaseException catch (error) {
+      debugPrint('Invitation send failed: ${error.code} ${error.message}');
+      _showMessage(_firestoreErrorMessage(error));
+    } finally {
+      if (mounted) {
+        setState(() => _isWorking = false);
+      }
+    }
+  }
+
+  Future<void> _respondToInvitation(
+    QueryDocumentSnapshot<Map<String, dynamic>> invitation, {
+    required bool accept,
+  }) async {
+    if (_isWorking || (accept && _isShared)) {
+      return;
+    }
+
+    setState(() => _isWorking = true);
+    try {
+      final data = invitation.data();
+      final senderId = data['senderId'] as String? ?? '';
+      final receiverId = data['receiverId'] as String? ?? '';
+      final senderEmail = data['senderEmail'] as String? ?? '초대한 사람';
+      final receiverEmail =
+          data['receiverEmail'] as String? ?? widget.user.email ?? '나';
+      if (receiverId != widget.user.uid ||
+          senderId.isEmpty ||
+          data['status'] != 'pending') {
+        _showMessage('이미 처리되었거나 올바르지 않은 요청입니다.');
+        return;
+      }
+
+      final database = FirebaseFirestore.instance;
+      if (!accept) {
+        await invitation.reference.update({
+          'status': 'rejected',
+          'respondedAt': FieldValue.serverTimestamp(),
+        });
+        _showMessage('요청을 거절했습니다.');
+        return;
+      }
+
+      final sharedLedgerId = 'shared_${invitation.id}';
+      final batch = database.batch();
+      batch.set(database.collection('ledgers').doc(sharedLedgerId), {
+        'name': '함께 쓰는 가계부',
+        'memberIds': [senderId, receiverId],
+        'memberEmails': [senderEmail, receiverEmail],
+        'createdBy': senderId,
+        'acceptedBy': receiverId,
+        'sourceInvitationId': invitation.id,
+        'expenseCategories': defaultExpenseCategories,
+        'incomeCategories': defaultIncomeCategories,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      batch.update(invitation.reference, {
+        'status': 'accepted',
+        'sharedLedgerId': sharedLedgerId,
+        'respondedAt': FieldValue.serverTimestamp(),
+      });
+      await batch.commit();
+      _showMessage('연결되었습니다. 이제 두 사람이 같은 가계부를 사용합니다.');
+    } on FirebaseException catch (error) {
+      debugPrint('Invitation response failed: ${error.code} ${error.message}');
+      _showMessage(_firestoreErrorMessage(error));
+    } finally {
+      if (mounted) {
+        setState(() => _isWorking = false);
+      }
+    }
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _sortInvitations(
+    Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> documents,
+  ) {
+    final result = documents.toList();
+    result.sort((a, b) {
+      final aDate = a.data()['createdAt'];
+      final bDate = b.data()['createdAt'];
+      final aMilliseconds = aDate is Timestamp
+          ? aDate.millisecondsSinceEpoch
+          : 0;
+      final bMilliseconds = bDate is Timestamp
+          ? bDate.millisecondsSinceEpoch
+          : 0;
+      return bMilliseconds.compareTo(aMilliseconds);
+    });
+    return result;
+  }
+
+  Widget _buildIncomingInvitations(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('invitations')
+          .where('receiverId', isEqualTo: widget.user.uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return const _TogetherNotice(
+            icon: Icons.error_outline_rounded,
+            text: '받은 요청을 불러오지 못했습니다.',
+          );
+        }
+        final invitations = _sortInvitations(
+          snapshot.data?.docs.where(
+                (document) => document.data()['status'] == 'pending',
+              ) ??
+              const [],
+        );
+        if (invitations.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '받은 요청',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 10),
+            ...invitations.map((invitation) {
+              final senderEmail =
+                  invitation.data()['senderEmail'] as String? ?? '사용자';
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        senderEmail,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        '함께 가계부를 사용하고 싶어 합니다.',
+                        style: TextStyle(color: Color(0xFF6B7280)),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: _isWorking
+                                ? null
+                                : () => _respondToInvitation(
+                                    invitation,
+                                    accept: false,
+                                  ),
+                            child: const Text('거절'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            onPressed: _isWorking || _isShared
+                                ? null
+                                : () => _respondToInvitation(
+                                    invitation,
+                                    accept: true,
+                                  ),
+                            child: const Text('수락'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+            const SizedBox(height: 10),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSentInvitations(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('invitations')
+          .where('senderId', isEqualTo: widget.user.uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return const _TogetherNotice(
+            icon: Icons.error_outline_rounded,
+            text: '보낸 요청을 불러오지 못했습니다.',
+          );
+        }
+        final invitations = _sortInvitations(snapshot.data?.docs ?? const []);
+        if (invitations.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '보낸 요청',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 10),
+            ...invitations.take(5).map((invitation) {
+              final data = invitation.data();
+              final receiverEmail = data['receiverEmail'] as String? ?? '사용자';
+              final status = data['status'] as String? ?? 'pending';
+              final statusText = switch (status) {
+                'accepted' => '수락됨',
+                'rejected' => '거절됨',
+                _ => '승인 기다리는 중',
+              };
+              final statusColor = switch (status) {
+                'accepted' => const Color(0xFF047857),
+                'rejected' => const Color(0xFFB91C1C),
+                _ => const Color(0xFF6B7280),
+              };
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.person_outline_rounded),
+                  ),
+                  title: Text(
+                    receiverEmail,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(
+                    statusText,
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              );
+            }),
+            const SizedBox(height: 10),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final partnerEmails = widget.memberEmails
+        .where((email) => email != widget.user.email)
+        .toList();
+    final partnerName = partnerEmails.isEmpty
+        ? '상대방'
+        : partnerEmails.join(', ');
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -1950,33 +2451,49 @@ class TogetherPage extends StatelessWidget {
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
-                            Icons.group_add_rounded,
+                            _isShared
+                                ? Icons.people_rounded
+                                : Icons.group_add_rounded,
                             size: 34,
                             color: Theme.of(context).colorScheme.primary,
                           ),
                         ),
                         const SizedBox(height: 20),
-                        const Text(
-                          '아직 함께하는 사람이 없어요',
-                          style: TextStyle(
+                        Text(
+                          _isShared ? '함께 사용 중' : '함께할 사람을 초대해요',
+                          style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
                         const SizedBox(height: 8),
-                        const Text(
-                          '다음 단계에서 초대 코드와\n승인 기능을 연결할 예정입니다.',
+                        Text(
+                          _isShared
+                              ? '$partnerName 님과 같은 내역을 보고 있어요.'
+                              : '상대방의 초대 코드를 입력하면\n승인 요청이 전송됩니다.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(
+                          style: const TextStyle(
                             color: Color(0xFF6B7280),
                             height: 1.5,
                           ),
                         ),
+                        if (_isShared) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            widget.ledgerName,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 20),
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
+                          padding: const EdgeInsets.only(
+                            left: 16,
+                            top: 8,
+                            right: 8,
+                            bottom: 8,
                           ),
                           decoration: BoxDecoration(
                             color: const Color(0xFFF3F4F6),
@@ -1988,36 +2505,50 @@ class TogetherPage extends StatelessWidget {
                               const Icon(Icons.key_rounded, size: 18),
                               const SizedBox(width: 8),
                               Text(
-                                '내 초대 코드: '
-                                '${user.uid.substring(0, 8).toUpperCase()}',
+                                '내 코드: $_inviteCode',
                                 style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
+                                  fontWeight: FontWeight.w800,
                                 ),
+                              ),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                onPressed: () async {
+                                  await Clipboard.setData(
+                                    ClipboardData(text: _inviteCode),
+                                  );
+                                  _showMessage('초대 코드를 복사했습니다.');
+                                },
+                                icon: const Icon(Icons.copy_rounded, size: 18),
+                                tooltip: '초대 코드 복사',
                               ),
                             ],
                           ),
                         ),
-                        const SizedBox(height: 12),
-                        FilledButton.icon(
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Firebase 연결 후 사용할 수 있어요.'),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.person_add_alt_1_rounded),
-                          label: const Text('초대하기'),
+                        if (!_isShared) ...[
+                          const SizedBox(height: 12),
+                          FilledButton.icon(
+                            onPressed: _isWorking ? null : _openInviteDialog,
+                            icon: const Icon(Icons.person_add_alt_1_rounded),
+                            label: Text(_isWorking ? '처리 중...' : '초대 코드 입력'),
+                          ),
+                        ],
+                        const SizedBox(height: 24),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: _buildIncomingInvitations(context),
                         ),
-                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: _buildSentInvitations(context),
+                        ),
                         OutlinedButton.icon(
-                          onPressed: onManageCategories,
+                          onPressed: widget.onManageCategories,
                           icon: const Icon(Icons.category_outlined),
                           label: const Text('분류 관리'),
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          user.email ?? '사용자',
+                          widget.user.email ?? '사용자',
                           style: const TextStyle(color: Color(0xFF6B7280)),
                         ),
                       ],
@@ -2028,6 +2559,27 @@ class TogetherPage extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _TogetherNotice extends StatelessWidget {
+  const _TogetherNotice({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: const Color(0xFFB91C1C)),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text)),
+        ],
       ),
     );
   }
