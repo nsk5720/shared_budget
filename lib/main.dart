@@ -1073,7 +1073,7 @@ class _TransactionsPageState extends State<TransactionsPage> {
         widget.transactions
             .where((item) => isSameMonth(item.date, _selectedMonth))
             .toList()
-          ..sort((a, b) => b.date.compareTo(a.date));
+          ..sort((a, b) => a.date.compareTo(b.date));
     final groups = <DateTime, List<BudgetTransaction>>{};
     for (final transaction in monthlyTransactions) {
       final day = DateTime(
@@ -2205,6 +2205,26 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                   ),
                 ),
                 const SizedBox(height: 18),
+                const _InputLabel('날짜'),
+                const SizedBox(height: 7),
+                InkWell(
+                  onTap: _pickDate,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.calendar_month_rounded),
+                      suffixIcon: Icon(Icons.chevron_right_rounded),
+                    ),
+                    child: Text(
+                      formatFullDate(_date),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 15),
                 const _InputLabel('사용처'),
                 const SizedBox(height: 7),
                 TextFormField(
@@ -2242,26 +2262,6 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                     }
                     return null;
                   },
-                ),
-                const SizedBox(height: 15),
-                const _InputLabel('날짜'),
-                const SizedBox(height: 7),
-                InkWell(
-                  onTap: _pickDate,
-                  borderRadius: BorderRadius.circular(14),
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.calendar_month_rounded),
-                      suffixIcon: Icon(Icons.chevron_right_rounded),
-                    ),
-                    child: Text(
-                      formatFullDate(_date),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
                 ),
                 const SizedBox(height: 15),
                 const _InputLabel('분류'),
