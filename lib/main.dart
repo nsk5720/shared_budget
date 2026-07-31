@@ -314,6 +314,10 @@ String _authErrorMessage(String code) {
 
 enum TransactionType { expense, income }
 
+const defaultExpenseCategories = ['식비', '카페', '교통', '쇼핑', '생활', '의료', '기타'];
+
+const defaultIncomeCategories = ['급여', '용돈', '부수입', '기타'];
+
 class BudgetTransaction {
   BudgetTransaction({
     required this.id,
@@ -390,7 +394,8 @@ class SmsTransactionParser {
       final day = int.parse(dateMatch.group(2)!);
       final hour = int.tryParse(dateMatch.group(3) ?? '') ?? 0;
       final minute = int.tryParse(dateMatch.group(4) ?? '') ?? 0;
-      date = DateTime(now.year, month, day, hour, minute);
+      final year = month > now.month + 1 ? now.year - 1 : now.year;
+      date = DateTime(year, month, day, hour, minute);
     }
 
     var title = '카드 결제';
@@ -470,8 +475,12 @@ class _BudgetShellState extends State<BudgetShell> {
   String? _lastPresentedSms;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _transactionSubscription;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+  _categorySubscription;
 
   final List<BudgetTransaction> _transactions = [];
+  List<String> _expenseCategories = [...defaultExpenseCategories];
+  List<String> _incomeCategories = [...defaultIncomeCategories];
 
   String get _ledgerId => 'personal_${widget.user.uid}';
 
@@ -513,6 +522,36 @@ class _BudgetShellState extends State<BudgetShell> {
         'createdBy': user.uid,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      final ledgerSnapshot = await ledgerReference.get();
+      final ledgerData = ledgerSnapshot.data() ?? {};
+      if (ledgerData['expenseCategories'] == null ||
+          ledgerData['incomeCategories'] == null) {
+        await ledgerReference.update({
+          'expenseCategories': defaultExpenseCategories,
+          'incomeCategories': defaultIncomeCategories,
+        });
+      }
+      _categorySubscription = ledgerReference.snapshots().listen((snapshot) {
+        final data = snapshot.data();
+        if (data == null || !mounted) {
+          return;
+        }
+        final expenses = (data['expenseCategories'] as List<dynamic>?)
+            ?.whereType<String>()
+            .toList();
+        final incomes = (data['incomeCategories'] as List<dynamic>?)
+            ?.whereType<String>()
+            .toList();
+        setState(() {
+          _expenseCategories = expenses == null || expenses.isEmpty
+              ? [...defaultExpenseCategories]
+              : expenses;
+          _incomeCategories = incomes == null || incomes.isEmpty
+              ? [...defaultIncomeCategories]
+              : incomes;
+        });
+      });
 
       _transactionSubscription = ledgerReference
           .collection('transactions')
@@ -566,6 +605,7 @@ class _BudgetShellState extends State<BudgetShell> {
   @override
   void dispose() {
     _transactionSubscription?.cancel();
+    _categorySubscription?.cancel();
     super.dispose();
   }
 
@@ -638,7 +678,11 @@ class _BudgetShellState extends State<BudgetShell> {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => AddTransactionSheet(initialDraft: draft),
+      builder: (context) => AddTransactionSheet(
+        initialDraft: draft,
+        expenseCategories: _expenseCategories,
+        incomeCategories: _incomeCategories,
+      ),
     );
 
     if (result != null) {
@@ -661,6 +705,32 @@ class _BudgetShellState extends State<BudgetShell> {
     return false;
   }
 
+  Future<void> _saveCategories({
+    required List<String> expenses,
+    required List<String> incomes,
+  }) async {
+    await FirebaseFirestore.instance
+        .collection('ledgers')
+        .doc(_ledgerId)
+        .update({
+          'expenseCategories': expenses,
+          'incomeCategories': incomes,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+  }
+
+  Future<void> _openCategoryManager() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => CategoryManagerPage(
+          expenseCategories: _expenseCategories,
+          incomeCategories: _incomeCategories,
+          onSave: _saveCategories,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = [
@@ -669,7 +739,11 @@ class _BudgetShellState extends State<BudgetShell> {
         transactions: _transactions,
         isLoading: _loadingTransactions,
       ),
-      TogetherPage(user: widget.user),
+      StatisticsPage(
+        transactions: _transactions,
+        isLoading: _loadingTransactions,
+      ),
+      TogetherPage(user: widget.user, onManageCategories: _openCategoryManager),
     ];
 
     return Scaffold(
@@ -696,6 +770,11 @@ class _BudgetShellState extends State<BudgetShell> {
             icon: Icon(Icons.receipt_long_outlined),
             selectedIcon: Icon(Icons.receipt_long_rounded),
             label: '내역',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.bar_chart_outlined),
+            selectedIcon: Icon(Icons.bar_chart_rounded),
+            label: '통계',
           ),
           NavigationDestination(
             icon: Icon(Icons.people_outline_rounded),
@@ -730,10 +809,14 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final income = transactions
+    final now = DateTime.now();
+    final monthlyTransactions = transactions
+        .where((item) => isSameMonth(item.date, now))
+        .toList();
+    final income = monthlyTransactions
         .where((item) => item.type == TransactionType.income)
         .fold<int>(0, (total, item) => total + item.amount);
-    final expense = transactions
+    final expense = monthlyTransactions
         .where((item) => item.type == TransactionType.expense)
         .fold<int>(0, (total, item) => total + item.amount);
 
@@ -746,7 +829,11 @@ class HomePage extends StatelessWidget {
               children: [
                 const _HomeHeader(),
                 const SizedBox(height: 22),
-                _SummaryCard(income: income, expense: expense),
+                _SummaryCard(
+                  income: income,
+                  expense: expense,
+                  month: now.month,
+                ),
                 const SizedBox(height: 28),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -841,10 +928,15 @@ class _HomeHeader extends StatelessWidget {
 }
 
 class _SummaryCard extends StatelessWidget {
-  const _SummaryCard({required this.income, required this.expense});
+  const _SummaryCard({
+    required this.income,
+    required this.expense,
+    required this.month,
+  });
 
   final int income;
   final int expense;
+  final int month;
 
   @override
   Widget build(BuildContext context) {
@@ -870,9 +962,9 @@ class _SummaryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '7월 남은 금액',
-            style: TextStyle(color: Color(0xFFDAD7FE), fontSize: 14),
+          Text(
+            '$month월 남은 금액',
+            style: const TextStyle(color: Color(0xFFDAD7FE), fontSize: 14),
           ),
           const SizedBox(height: 6),
           Text(
@@ -958,7 +1050,7 @@ class _SummaryItem extends StatelessWidget {
   }
 }
 
-class TransactionsPage extends StatelessWidget {
+class TransactionsPage extends StatefulWidget {
   const TransactionsPage({
     super.key,
     required this.transactions,
@@ -969,45 +1061,487 @@ class TransactionsPage extends StatelessWidget {
   final bool isLoading;
 
   @override
+  State<TransactionsPage> createState() => _TransactionsPageState();
+}
+
+class _TransactionsPageState extends State<TransactionsPage> {
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
+
+  @override
   Widget build(BuildContext context) {
+    final monthlyTransactions =
+        widget.transactions
+            .where((item) => isSameMonth(item.date, _selectedMonth))
+            .toList()
+          ..sort((a, b) => b.date.compareTo(a.date));
+    final groups = <DateTime, List<BudgetTransaction>>{};
+    for (final transaction in monthlyTransactions) {
+      final day = DateTime(
+        transaction.date.year,
+        transaction.date.month,
+        transaction.date.day,
+      );
+      groups.putIfAbsent(day, () => []).add(transaction);
+    }
+
     return SafeArea(
-      child: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            pinned: true,
-            title: const Text(
-              '전체 내역',
-              style: TextStyle(fontWeight: FontWeight.w900),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '내역',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${monthlyTransactions.length}건',
+                  style: const TextStyle(color: Color(0xFF6B7280)),
+                ),
+              ],
             ),
-            actions: [
-              IconButton(
-                onPressed: () {},
-                icon: const Icon(Icons.search_rounded),
-                tooltip: '검색',
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: _MonthSelector(
+              month: _selectedMonth,
+              onPrevious: () {
+                setState(() {
+                  _selectedMonth = previousMonth(_selectedMonth);
+                });
+              },
+              onNext: () {
+                setState(() {
+                  _selectedMonth = nextMonth(_selectedMonth);
+                });
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: widget.isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : groups.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: _EmptyTransactions(),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 110),
+                    itemCount: groups.length,
+                    itemBuilder: (context, index) {
+                      final day = groups.keys.elementAt(index);
+                      final dayTransactions = groups[day]!;
+                      final dayExpense = dayTransactions
+                          .where((item) => item.type == TransactionType.expense)
+                          .fold<int>(0, (total, item) => total + item.amount);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(4, 0, 4, 9),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    formatDayHeader(day),
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  if (dayExpense > 0)
+                                    Text(
+                                      '지출 ${formatWon(dayExpense)}원',
+                                      style: const TextStyle(
+                                        color: Color(0xFF6B7280),
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            ...dayTransactions.map(
+                              (transaction) => Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: TransactionTile(
+                                  transaction: transaction,
+                                  showDate: false,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MonthSelector extends StatelessWidget {
+  const _MonthSelector({
+    required this.month,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final DateTime month;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 52,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: onPrevious,
+            icon: const Icon(Icons.chevron_left_rounded),
+            tooltip: '이전 달',
+          ),
+          Expanded(
+            child: Text(
+              formatMonth(month),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+            ),
+          ),
+          IconButton(
+            onPressed: onNext,
+            icon: const Icon(Icons.chevron_right_rounded),
+            tooltip: '다음 달',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class StatisticsPage extends StatefulWidget {
+  const StatisticsPage({
+    super.key,
+    required this.transactions,
+    required this.isLoading,
+  });
+
+  final List<BudgetTransaction> transactions;
+  final bool isLoading;
+
+  @override
+  State<StatisticsPage> createState() => _StatisticsPageState();
+}
+
+class _StatisticsPageState extends State<StatisticsPage> {
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
+
+  @override
+  Widget build(BuildContext context) {
+    final current = widget.transactions
+        .where((item) => isSameMonth(item.date, _selectedMonth))
+        .toList();
+    final previous = widget.transactions
+        .where((item) => isSameMonth(item.date, previousMonth(_selectedMonth)))
+        .toList();
+    final income = totalForType(current, TransactionType.income);
+    final expense = totalForType(current, TransactionType.expense);
+    final previousIncome = totalForType(previous, TransactionType.income);
+    final previousExpense = totalForType(previous, TransactionType.expense);
+
+    return SafeArea(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '통계',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w900,
+                ),
               ),
-              const SizedBox(width: 8),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: _MonthSelector(
+              month: _selectedMonth,
+              onPrevious: () {
+                setState(() {
+                  _selectedMonth = previousMonth(_selectedMonth);
+                });
+              },
+              onNext: () {
+                setState(() {
+                  _selectedMonth = nextMonth(_selectedMonth);
+                });
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: widget.isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 110),
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _StatSummaryCard(
+                              label: '수입',
+                              amount: income,
+                              previousAmount: previousIncome,
+                              color: const Color(0xFF10B981),
+                              icon: Icons.south_west_rounded,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _StatSummaryCard(
+                              label: '지출',
+                              amount: expense,
+                              previousAmount: previousExpense,
+                              color: const Color(0xFFEF4444),
+                              icon: Icons.north_east_rounded,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _BalanceCard(balance: income - expense),
+                      const SizedBox(height: 22),
+                      _CategoryStatistics(
+                        title: '지출 분류',
+                        transactions: current
+                            .where(
+                              (item) => item.type == TransactionType.expense,
+                            )
+                            .toList(),
+                        color: const Color(0xFFEF4444),
+                      ),
+                      const SizedBox(height: 14),
+                      _CategoryStatistics(
+                        title: '수입 분류',
+                        transactions: current
+                            .where(
+                              (item) => item.type == TransactionType.income,
+                            )
+                            .toList(),
+                        color: const Color(0xFF10B981),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatSummaryCard extends StatelessWidget {
+  const _StatSummaryCard({
+    required this.label,
+    required this.amount,
+    required this.previousAmount,
+    required this.color,
+    required this.icon,
+  });
+
+  final String label;
+  final int amount;
+  final int previousAmount;
+  final Color color;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final change = percentageChange(amount, previousAmount);
+    final isIncrease = amount >= previousAmount;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 6),
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
             ],
           ),
-          if (isLoading)
-            const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (transactions.isEmpty)
-            const SliverPadding(
-              padding: EdgeInsets.all(20),
-              sliver: SliverToBoxAdapter(child: _EmptyTransactions()),
+          const SizedBox(height: 12),
+          Text(
+            '${formatWon(amount)}원',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            change,
+            style: TextStyle(
+              color: amount == previousAmount
+                  ? const Color(0xFF6B7280)
+                  : isIncrease
+                  ? const Color(0xFFEF4444)
+                  : const Color(0xFF2563EB),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BalanceCard extends StatelessWidget {
+  const _BalanceCard({required this.balance});
+
+  final int balance;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.account_balance_wallet_rounded,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(width: 10),
+          const Text('이번 달 잔액', style: TextStyle(fontWeight: FontWeight.w700)),
+          const Spacer(),
+          Text(
+            '${formatWon(balance)}원',
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CategoryStatistics extends StatelessWidget {
+  const _CategoryStatistics({
+    required this.title,
+    required this.transactions,
+    required this.color,
+  });
+
+  final String title;
+  final List<BudgetTransaction> transactions;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final categoryTotals = <String, int>{};
+    for (final transaction in transactions) {
+      categoryTotals.update(
+        transaction.category,
+        (value) => value + transaction.amount,
+        ifAbsent: () => transaction.amount,
+      );
+    }
+    final entries = categoryTotals.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final total = entries.fold<int>(0, (value, item) => value + item.value);
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 14),
+          if (entries.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Center(
+                child: Text(
+                  '이 달에는 내역이 없어요.',
+                  style: TextStyle(color: Color(0xFF9CA3AF)),
+                ),
+              ),
             )
           else
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 110),
-              sliver: SliverList.separated(
-                itemCount: transactions.length,
-                itemBuilder: (context, index) {
-                  return TransactionTile(transaction: transactions[index]);
-                },
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-              ),
-            ),
+            ...entries.map((entry) {
+              final ratio = total == 0 ? 0.0 : entry.value / total;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 15),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Icon(categoryIcon(entry.key), size: 18, color: color),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            entry.key,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        Text(
+                          '${formatWon(entry.value)}원',
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          '${(ratio * 100).round()}%',
+                          style: const TextStyle(
+                            color: Color(0xFF6B7280),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(99),
+                      child: LinearProgressIndicator(
+                        value: ratio,
+                        minHeight: 7,
+                        color: color,
+                        backgroundColor: color.withValues(alpha: 0.1),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
         ],
       ),
     );
@@ -1015,9 +1549,14 @@ class TransactionsPage extends StatelessWidget {
 }
 
 class TransactionTile extends StatelessWidget {
-  const TransactionTile({super.key, required this.transaction});
+  const TransactionTile({
+    super.key,
+    required this.transaction,
+    this.showDate = true,
+  });
 
   final BudgetTransaction transaction;
+  final bool showDate;
 
   @override
   Widget build(BuildContext context) {
@@ -1056,7 +1595,10 @@ class TransactionTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${transaction.category} · ${formatDate(transaction.date)}',
+                    showDate
+                        ? '${transaction.category} · '
+                              '${formatDate(transaction.date)}'
+                        : transaction.category,
                     style: const TextStyle(
                       color: Color(0xFF9CA3AF),
                       fontSize: 13,
@@ -1108,10 +1650,226 @@ class _EmptyTransactions extends StatelessWidget {
   }
 }
 
+class CategoryManagerPage extends StatefulWidget {
+  const CategoryManagerPage({
+    super.key,
+    required this.expenseCategories,
+    required this.incomeCategories,
+    required this.onSave,
+  });
+
+  final List<String> expenseCategories;
+  final List<String> incomeCategories;
+  final Future<void> Function({
+    required List<String> expenses,
+    required List<String> incomes,
+  })
+  onSave;
+
+  @override
+  State<CategoryManagerPage> createState() => _CategoryManagerPageState();
+}
+
+class _CategoryManagerPageState extends State<CategoryManagerPage> {
+  final _controller = TextEditingController();
+  late List<String> _expenses;
+  late List<String> _incomes;
+  TransactionType _selectedType = TransactionType.expense;
+  bool _saving = false;
+
+  List<String> get _selectedCategories {
+    return _selectedType == TransactionType.expense ? _expenses : _incomes;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _expenses = [...widget.expenseCategories];
+    _incomes = [...widget.incomeCategories];
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _addCategory() {
+    final category = _controller.text.trim();
+    if (category.isEmpty) {
+      return;
+    }
+    if (_selectedCategories.contains(category)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('이미 있는 분류입니다.')));
+      return;
+    }
+    setState(() {
+      _selectedCategories.add(category);
+      _controller.clear();
+    });
+  }
+
+  void _removeCategory(String category) {
+    if (_selectedCategories.length == 1) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('분류를 한 개 이상 남겨주세요.')));
+      return;
+    }
+    setState(() => _selectedCategories.remove(category));
+  }
+
+  Future<void> _save() async {
+    if (_saving) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(expenses: _expenses, incomes: _incomes);
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } on FirebaseException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_firestoreErrorMessage(error))));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          '분류 관리',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : _save,
+            child: _saving
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('저장'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SegmentedButton<TransactionType>(
+                segments: const [
+                  ButtonSegment(
+                    value: TransactionType.expense,
+                    label: Text('지출 분류'),
+                    icon: Icon(Icons.north_east_rounded),
+                  ),
+                  ButtonSegment(
+                    value: TransactionType.income,
+                    label: Text('수입 분류'),
+                    icon: Icon(Icons.south_west_rounded),
+                  ),
+                ],
+                selected: {_selectedType},
+                onSelectionChanged: (selection) {
+                  setState(() {
+                    _selectedType = selection.first;
+                    _controller.clear();
+                  });
+                },
+                showSelectedIcon: false,
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _addCategory(),
+                      decoration: const InputDecoration(
+                        hintText: '새 분류 이름',
+                        prefixIcon: Icon(Icons.add_rounded),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    height: 56,
+                    child: FilledButton(
+                      onPressed: _addCategory,
+                      child: const Text('추가'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+              Text(
+                '${_selectedCategories.length}개 분류',
+                style: const TextStyle(
+                  color: Color(0xFF6B7280),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: _selectedCategories.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final category = _selectedCategories[index];
+                    return Card(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: ListTile(
+                        leading: Icon(categoryIcon(category)),
+                        title: Text(
+                          category,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        trailing: IconButton(
+                          onPressed: () => _removeCategory(category),
+                          icon: const Icon(Icons.delete_outline_rounded),
+                          tooltip: '삭제',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class TogetherPage extends StatelessWidget {
-  const TogetherPage({super.key, required this.user});
+  const TogetherPage({
+    super.key,
+    required this.user,
+    required this.onManageCategories,
+  });
 
   final User user;
+  final VoidCallback onManageCategories;
 
   Future<void> _confirmSignOut(BuildContext context) async {
     final shouldSignOut = await showDialog<bool>(
@@ -1252,6 +2010,12 @@ class TogetherPage extends StatelessWidget {
                           label: const Text('초대하기'),
                         ),
                         const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: onManageCategories,
+                          icon: const Icon(Icons.category_outlined),
+                          label: const Text('분류 관리'),
+                        ),
+                        const SizedBox(height: 8),
                         Text(
                           user.email ?? '사용자',
                           style: const TextStyle(color: Color(0xFF6B7280)),
@@ -1270,9 +2034,16 @@ class TogetherPage extends StatelessWidget {
 }
 
 class AddTransactionSheet extends StatefulWidget {
-  const AddTransactionSheet({super.key, this.initialDraft});
+  const AddTransactionSheet({
+    super.key,
+    this.initialDraft,
+    required this.expenseCategories,
+    required this.incomeCategories,
+  });
 
   final SmsTransactionDraft? initialDraft;
+  final List<String> expenseCategories;
+  final List<String> incomeCategories;
 
   @override
   State<AddTransactionSheet> createState() => _AddTransactionSheetState();
@@ -1290,8 +2061,8 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
 
   List<String> get _categories {
     return _type == TransactionType.expense
-        ? ['식비', '카페', '교통', '쇼핑', '생활', '의료', '기타']
-        : ['급여', '용돈', '부수입', '기타'];
+        ? widget.expenseCategories
+        : widget.incomeCategories;
   }
 
   @override
@@ -1305,7 +2076,12 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
     _memoController = TextEditingController(
       text: draft == null ? '' : '문자 자동입력',
     );
-    _category = draft?.category ?? '식비';
+    final suggestedCategory = draft?.category;
+    _category =
+        suggestedCategory != null &&
+            widget.expenseCategories.contains(suggestedCategory)
+        ? suggestedCategory
+        : widget.expenseCategories.first;
     _date = draft?.date ?? DateTime.now();
   }
 
@@ -1320,8 +2096,33 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
   void _changeType(TransactionType type) {
     setState(() {
       _type = type;
-      _category = type == TransactionType.expense ? '식비' : '급여';
+      _category = type == TransactionType.expense
+          ? widget.expenseCategories.first
+          : widget.incomeCategories.first;
     });
+  }
+
+  Future<void> _pickDate() async {
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      helpText: '거래 날짜 선택',
+      cancelText: '취소',
+      confirmText: '선택',
+    );
+    if (selected != null && mounted) {
+      setState(() {
+        _date = DateTime(
+          selected.year,
+          selected.month,
+          selected.day,
+          _date.hour,
+          _date.minute,
+        );
+      });
+    }
   }
 
   void _save() {
@@ -1443,6 +2244,26 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                   },
                 ),
                 const SizedBox(height: 15),
+                const _InputLabel('날짜'),
+                const SizedBox(height: 7),
+                InkWell(
+                  onTap: _pickDate,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.calendar_month_rounded),
+                      suffixIcon: Icon(Icons.chevron_right_rounded),
+                    ),
+                    child: Text(
+                      formatFullDate(_date),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 15),
                 const _InputLabel('분류'),
                 const SizedBox(height: 7),
                 DropdownButtonFormField<String>(
@@ -1511,6 +2332,45 @@ class _InputLabel extends StatelessWidget {
   }
 }
 
+bool isSameMonth(DateTime first, DateTime second) {
+  return first.year == second.year && first.month == second.month;
+}
+
+DateTime previousMonth(DateTime month) {
+  return DateTime(month.year, month.month - 1);
+}
+
+DateTime nextMonth(DateTime month) {
+  return DateTime(month.year, month.month + 1);
+}
+
+int totalForType(List<BudgetTransaction> transactions, TransactionType type) {
+  return transactions
+      .where((item) => item.type == type)
+      .fold<int>(0, (total, item) => total + item.amount);
+}
+
+String percentageChange(int current, int previous) {
+  if (previous == 0) {
+    return current == 0 ? '전월과 동일' : '전월 내역 없음';
+  }
+  final percentage = ((current - previous) / previous * 100).abs();
+  if (percentage < 0.05) {
+    return '전월과 동일';
+  }
+  return '전월 대비 ${percentage.toStringAsFixed(1)}% '
+      '${current > previous ? '증가' : '감소'}';
+}
+
+String formatMonth(DateTime date) {
+  return '${date.year}년 ${date.month}월';
+}
+
+String formatDayHeader(DateTime date) {
+  const weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+  return '${date.month}월 ${date.day}일 (${weekdays[date.weekday - 1]})';
+}
+
 String formatWon(int value) {
   final sign = value < 0 ? '-' : '';
   final digits = value.abs().toString();
@@ -1528,6 +2388,12 @@ String formatWon(int value) {
 
 String formatDate(DateTime date) {
   return '${date.month}월 ${date.day}일';
+}
+
+String formatFullDate(DateTime date) {
+  const weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+  return '${date.year}년 ${date.month}월 ${date.day}일 '
+      '(${weekdays[date.weekday - 1]})';
 }
 
 IconData categoryIcon(String category) {

@@ -34,4 +34,17 @@ void main() {
     expect(draft.date.month, 7);
     expect(draft.date.day, 30);
   });
+
+  test('전월 대비 증가와 감소 비율을 계산한다', () {
+    expect(percentageChange(120, 100), '전월 대비 20.0% 증가');
+    expect(percentageChange(80, 100), '전월 대비 20.0% 감소');
+    expect(percentageChange(0, 0), '전월과 동일');
+  });
+
+  test('1월의 이전 달은 전년도 12월이다', () {
+    final result = previousMonth(DateTime(2026, 1));
+
+    expect(result.year, 2025);
+    expect(result.month, 12);
+  });
 }
