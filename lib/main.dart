@@ -764,8 +764,8 @@ class _BudgetShellState extends State<BudgetShell> {
   int _currentIndex = 0;
   bool _checkingSms = false;
   bool _loadingTransactions = true;
+  bool _connectingFirestore = false;
   String? _connectionError;
-  Timer? _firestoreLoadingTimer;
   String? _lastPresentedSms;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _transactionSubscription;
@@ -878,7 +878,11 @@ class _BudgetShellState extends State<BudgetShell> {
   }
 
   Future<void> _connectFirestore() async {
-    _firestoreLoadingTimer?.cancel();
+    if (_connectingFirestore) {
+      return;
+    }
+    _connectingFirestore = true;
+
     await _transactionSubscription?.cancel();
     await _ledgerSubscription?.cancel();
     await _categorySubscription?.cancel();
@@ -890,14 +894,12 @@ class _BudgetShellState extends State<BudgetShell> {
       setState(() {
         _loadingTransactions = true;
         _connectionError = null;
-        _ledgerId = '';
       });
     }
     final database = FirebaseFirestore.instance;
     final user = widget.user;
     final inviteCode = user.uid.substring(0, 8).toUpperCase();
     final personalLedgerId = 'personal_${user.uid}';
-    final userReference = database.collection('users').doc(user.uid);
     final ledgerReference = database
         .collection('ledgers')
         .doc(personalLedgerId);
@@ -912,62 +914,47 @@ class _BudgetShellState extends State<BudgetShell> {
           _activateLedger(cachedLedger);
         }
       } on FirebaseException {
-        // 첫 설치처럼 캐시가 없는 경우에는 아래 서버 설정을 계속 진행합니다.
+        // 첫 설치처럼 캐시가 없는 경우에는 서버에서 가계부를 확인합니다.
       }
 
-      final setupBatch = database.batch();
-      setupBatch.set(userReference, {
-        'email': user.email,
-        'inviteCode': inviteCode,
-        'appBuild': '2026.08.11.1',
-        'lastLoginAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      setupBatch.set(
-        database.collection('inviteCodes').doc(inviteCode),
-        {
-          'userId': user.uid,
-          'email': user.email,
-          'updatedAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-      setupBatch.set(ledgerReference, {
-        'name': '내 가계부',
-        'memberIds': [user.uid],
-        'memberEmails': [user.email],
-        'createdBy': user.uid,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      await setupBatch.commit().timeout(const Duration(seconds: 15));
-
-      final ledgerSnapshot = await ledgerReference.get().timeout(
-        const Duration(seconds: 10),
-      );
-      final ledgerData = ledgerSnapshot.data() ?? {};
-      if (ledgerData['expenseCategories'] == null ||
-          ledgerData['incomeCategories'] == null) {
+      var ledgerSnapshot = await ledgerReference
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 15));
+      if (!ledgerSnapshot.exists) {
         await ledgerReference
-            .update({
+            .set({
+              'name': '내 가계부',
+              'memberIds': [user.uid],
+              'memberEmails': [user.email],
+              'createdBy': user.uid,
               'expenseCategories': defaultExpenseCategories,
               'incomeCategories': defaultIncomeCategories,
+              'updatedAt': FieldValue.serverTimestamp(),
             })
-            .timeout(const Duration(seconds: 10));
+            .timeout(const Duration(seconds: 15));
+        ledgerSnapshot = await ledgerReference
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 15));
       }
 
-      // 개인 가계부를 먼저 활성화해 거래 스트림이 즉시 시작되도록 합니다.
-      if (_ledgerId.isEmpty) {
-        _activateLedger(ledgerSnapshot);
+      if (!ledgerSnapshot.exists) {
+        throw FirebaseException(
+          plugin: 'cloud_firestore',
+          code: 'not-found',
+          message: 'Personal ledger was not created.',
+        );
       }
 
-      _firestoreLoadingTimer?.cancel();
-      _firestoreLoadingTimer = Timer(const Duration(seconds: 20), () {
-        if (mounted && _loadingTransactions) {
-          setState(() {
-            _loadingTransactions = false;
-            _connectionError = '거래 내역을 불러오지 못했습니다. Firebase 연결을 다시 시도해 주세요.';
-          });
-        }
-      });
+      // 거래 읽기를 먼저 시작하고, 계정 메타데이터 저장은 뒤에서 처리합니다.
+      _activateLedger(ledgerSnapshot);
+      unawaited(
+        _syncAccountMetadata(
+          database: database,
+          user: user,
+          inviteCode: inviteCode,
+          ledgerReference: ledgerReference,
+        ),
+      );
 
       _ledgerSubscription = database
           .collection('ledgers')
@@ -987,11 +974,47 @@ class _BudgetShellState extends State<BudgetShell> {
     } catch (error) {
       debugPrint('Unexpected Firestore connection error: $error');
       _setConnectionError('Firebase 연결 중 문제가 발생했습니다. 다시 시도해 주세요.');
+    } finally {
+      _connectingFirestore = false;
+    }
+  }
+
+  Future<void> _syncAccountMetadata({
+    required FirebaseFirestore database,
+    required User user,
+    required String inviteCode,
+    required DocumentReference<Map<String, dynamic>> ledgerReference,
+  }) async {
+    try {
+      final batch = database.batch();
+      batch.set(database.collection('users').doc(user.uid), {
+        'email': user.email,
+        'inviteCode': inviteCode,
+        'appBuild': '2026.08.11.2',
+        'lastLoginAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      batch.set(
+        database.collection('inviteCodes').doc(inviteCode),
+        {
+          'userId': user.uid,
+          'email': user.email,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      batch.set(ledgerReference, {
+        'memberIds': [user.uid],
+        'memberEmails': [user.email],
+        'createdBy': user.uid,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      await batch.commit().timeout(const Duration(seconds: 20));
+    } catch (error) {
+      debugPrint('Background account metadata sync failed: $error');
     }
   }
 
   void _setConnectionError(Object error) {
-    _firestoreLoadingTimer?.cancel();
     final message = error is FirebaseException
         ? _firestoreErrorMessage(error)
         : error.toString();
@@ -1122,7 +1145,6 @@ class _BudgetShellState extends State<BudgetShell> {
             }).toList();
 
             if (mounted) {
-              _firestoreLoadingTimer?.cancel();
               setState(() {
                 _transactions
                   ..clear()
@@ -1140,7 +1162,6 @@ class _BudgetShellState extends State<BudgetShell> {
 
   @override
   void dispose() {
-    _firestoreLoadingTimer?.cancel();
     _transactionSubscription?.cancel();
     _ledgerSubscription?.cancel();
     _categorySubscription?.cancel();
@@ -1210,7 +1231,8 @@ class _BudgetShellState extends State<BudgetShell> {
         .collection('ledgers')
         .doc(_ledgerId)
         .collection('transactions')
-        .add(transaction.toFirestore(widget.user.uid));
+        .add(transaction.toFirestore(widget.user.uid))
+        .timeout(const Duration(seconds: 15));
   }
 
   Future<bool> _openAddTransaction({SmsTransactionDraft? draft}) async {
@@ -1338,7 +1360,20 @@ class _BudgetShellState extends State<BudgetShell> {
       ),
       floatingActionButton: _currentIndex < 2
           ? FloatingActionButton.extended(
-              onPressed: _ledgerId.isEmpty ? null : () => _openAddTransaction(),
+              onPressed: () {
+                if (_ledgerId.isEmpty) {
+                  _showMessage(
+                    _connectingFirestore
+                        ? 'Firebase에서 가계부를 불러오는 중입니다.'
+                        : 'Firebase가 연결되지 않았습니다. 다시 연결합니다.',
+                  );
+                  if (!_connectingFirestore) {
+                    _connectFirestore();
+                  }
+                  return;
+                }
+                _openAddTransaction();
+              },
               icon: const Icon(Icons.add_rounded),
               label: const Text('내역 추가'),
             )
