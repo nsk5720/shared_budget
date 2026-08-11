@@ -10,8 +10,93 @@ import 'firebase_options.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  runApp(const SharedBudgetApp());
+  runApp(const FirebaseBootstrap());
+}
+
+class FirebaseBootstrap extends StatefulWidget {
+  const FirebaseBootstrap({super.key});
+
+  @override
+  State<FirebaseBootstrap> createState() => _FirebaseBootstrapState();
+}
+
+class _FirebaseBootstrapState extends State<FirebaseBootstrap> {
+  late Future<void> _initialization = _initializeFirebase();
+
+  Future<void> _initializeFirebase() async {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    ).timeout(const Duration(seconds: 15));
+  }
+
+  void _retry() {
+    setState(() => _initialization = _initializeFirebase());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<void>(
+      future: _initialization,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done &&
+            !snapshot.hasError) {
+          return const SharedBudgetApp();
+        }
+
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            body: SafeArea(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: snapshot.hasError
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.cloud_off_rounded,
+                              size: 54,
+                              color: Color(0xFFEF4444),
+                            ),
+                            const SizedBox(height: 18),
+                            const Text(
+                              'Firebase를 시작하지 못했습니다.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              '인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 20),
+                            FilledButton.icon(
+                              onPressed: _retry,
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('다시 연결'),
+                            ),
+                          ],
+                        )
+                      : const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CircularProgressIndicator(),
+                            SizedBox(height: 18),
+                            Text('Firebase 연결 중...'),
+                          ],
+                        ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class SharedBudgetApp extends StatelessWidget {
@@ -679,6 +764,8 @@ class _BudgetShellState extends State<BudgetShell> {
   int _currentIndex = 0;
   bool _checkingSms = false;
   bool _loadingTransactions = true;
+  String? _connectionError;
+  Timer? _firestoreLoadingTimer;
   String? _lastPresentedSms;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _transactionSubscription;
@@ -721,15 +808,17 @@ class _BudgetShellState extends State<BudgetShell> {
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('결제 Push 알림 자동등록 안내'),
+          title: const Text('결제 문자·Push 자동등록 안내'),
           content: const SingleChildScrollView(
             child: Text(
-              '우리 가계부는 은행·카드 앱이 표시하는 결제 Push 알림을 '
-              '감지합니다. 문자 권한은 사용하지 않습니다.\n\n'
+              '우리 가계부는 새로 수신되는 결제 SMS 문자와 은행·카드 앱이 '
+              '표시하는 결제 Push 알림을 감지합니다. 기존 문자함 전체는 '
+              '읽지 않습니다.\n\n'
+              '문자 수신 권한은 새 결제 문자를 자동 입력하는 데 사용합니다. '
               '알림 접근을 허용하면 Android 기능상 다른 앱의 알림을 볼 수 '
               '있지만, 이 앱은 금액과 결제 관련 단어가 함께 있는 알림만 '
               '대기 목록에 넣고 나머지는 저장하지 않습니다.\n\n'
-              '사용처, 금액, 날짜를 자동으로 입력하고 원문을 메모에 '
+              '문자와 Push에서 사용처, 금액, 날짜를 자동으로 입력하고 원문을 메모에 '
               '표시합니다. 사용자가 저장하기를 누른 경우에만 해당 '
               '내용이 Firebase에 저장되며, 함께쓰기 중이라면 연결된 상대방도 '
               '볼 수 있습니다.\n\n'
@@ -789,6 +878,30 @@ class _BudgetShellState extends State<BudgetShell> {
   }
 
   Future<void> _connectFirestore() async {
+    _firestoreLoadingTimer?.cancel();
+    await _transactionSubscription?.cancel();
+    await _ledgerSubscription?.cancel();
+    await _categorySubscription?.cancel();
+    _transactionSubscription = null;
+    _ledgerSubscription = null;
+    _categorySubscription = null;
+
+    if (mounted) {
+      setState(() {
+        _loadingTransactions = true;
+        _connectionError = null;
+        _ledgerId = '';
+      });
+    }
+    _firestoreLoadingTimer = Timer(const Duration(seconds: 20), () {
+      if (mounted && _loadingTransactions) {
+        setState(() {
+          _loadingTransactions = false;
+          _connectionError = 'Firebase 응답이 늦습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.';
+        });
+      }
+    });
+
     final database = FirebaseFirestore.instance;
     final user = widget.user;
     final inviteCode = user.uid.substring(0, 8).toUpperCase();
@@ -799,35 +912,43 @@ class _BudgetShellState extends State<BudgetShell> {
         .doc(personalLedgerId);
 
     try {
-      await userReference.set({
+      final setupBatch = database.batch();
+      setupBatch.set(userReference, {
         'email': user.email,
         'inviteCode': inviteCode,
-        'appBuild': '2026.07.31.2',
+        'appBuild': '2026.08.11.1',
         'lastLoginAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-
-      await database.collection('inviteCodes').doc(inviteCode).set({
-        'userId': user.uid,
-        'email': user.email,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      await ledgerReference.set({
+      setupBatch.set(
+        database.collection('inviteCodes').doc(inviteCode),
+        {
+          'userId': user.uid,
+          'email': user.email,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+      setupBatch.set(ledgerReference, {
         'name': '내 가계부',
         'memberIds': [user.uid],
         'memberEmails': [user.email],
         'createdBy': user.uid,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      await setupBatch.commit().timeout(const Duration(seconds: 15));
 
-      final ledgerSnapshot = await ledgerReference.get();
+      final ledgerSnapshot = await ledgerReference.get().timeout(
+        const Duration(seconds: 10),
+      );
       final ledgerData = ledgerSnapshot.data() ?? {};
       if (ledgerData['expenseCategories'] == null ||
           ledgerData['incomeCategories'] == null) {
-        await ledgerReference.update({
-          'expenseCategories': defaultExpenseCategories,
-          'incomeCategories': defaultIncomeCategories,
-        });
+        await ledgerReference
+            .update({
+              'expenseCategories': defaultExpenseCategories,
+              'incomeCategories': defaultIncomeCategories,
+            })
+            .timeout(const Duration(seconds: 10));
       }
       _ledgerSubscription = database
           .collection('ledgers')
@@ -836,18 +957,30 @@ class _BudgetShellState extends State<BudgetShell> {
           .listen(
             _selectActiveLedger,
             onError: (Object error) {
-              if (mounted) {
-                setState(() => _loadingTransactions = false);
-                _showMessage('사용할 가계부를 불러오지 못했습니다.');
-              }
+              _setConnectionError(error);
             },
           );
+    } on TimeoutException {
+      _setConnectionError('Firebase 연결 시간이 초과되었습니다. 인터넷을 확인하고 다시 시도해 주세요.');
     } on FirebaseException catch (error) {
       debugPrint('Firestore connection failed: ${error.code} ${error.message}');
-      if (mounted) {
-        setState(() => _loadingTransactions = false);
-        _showMessage(_firestoreErrorMessage(error));
-      }
+      _setConnectionError(error);
+    } catch (error) {
+      debugPrint('Unexpected Firestore connection error: $error');
+      _setConnectionError('Firebase 연결 중 문제가 발생했습니다. 다시 시도해 주세요.');
+    }
+  }
+
+  void _setConnectionError(Object error) {
+    _firestoreLoadingTimer?.cancel();
+    final message = error is FirebaseException
+        ? _firestoreErrorMessage(error)
+        : error.toString();
+    if (mounted) {
+      setState(() {
+        _loadingTransactions = false;
+        _connectionError = message;
+      });
     }
   }
 
@@ -970,25 +1103,25 @@ class _BudgetShellState extends State<BudgetShell> {
             }).toList();
 
             if (mounted) {
+              _firestoreLoadingTimer?.cancel();
               setState(() {
                 _transactions
                   ..clear()
                   ..addAll(transactions);
                 _loadingTransactions = false;
+                _connectionError = null;
               });
             }
           },
           onError: (Object error) {
-            if (mounted) {
-              setState(() => _loadingTransactions = false);
-              _showMessage('거래 내역을 불러오지 못했습니다.');
-            }
+            _setConnectionError(error);
           },
         );
   }
 
   @override
   void dispose() {
+    _firestoreLoadingTimer?.cancel();
     _transactionSubscription?.cancel();
     _ledgerSubscription?.cancel();
     _categorySubscription?.cancel();
@@ -1142,10 +1275,51 @@ class _BudgetShellState extends State<BudgetShell> {
     ];
 
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: pages),
+      body: Column(
+        children: [
+          if (_connectionError != null)
+            SafeArea(
+              bottom: false,
+              child: Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFE4E6),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.cloud_off_rounded,
+                      color: Color(0xFFBE123C),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _connectionError!,
+                        style: const TextStyle(
+                          color: Color(0xFF9F1239),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _connectFirestore,
+                      child: const Text('재시도'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(
+            child: IndexedStack(index: _currentIndex, children: pages),
+          ),
+        ],
+      ),
       floatingActionButton: _currentIndex < 2
           ? FloatingActionButton.extended(
-              onPressed: () => _openAddTransaction(),
+              onPressed: _ledgerId.isEmpty ? null : () => _openAddTransaction(),
               icon: const Icon(Icons.add_rounded),
               label: const Text('내역 추가'),
             )

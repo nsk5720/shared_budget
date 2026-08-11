@@ -1,5 +1,6 @@
 package com.solomon.sharedledger.shared_budget
 
+import android.Manifest
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -28,13 +29,20 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "requestSmsPermission" -> {
                     val permissions = mutableListOf<String>()
+                    if (ContextCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.RECEIVE_SMS,
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        permissions.add(Manifest.permission.RECEIVE_SMS)
+                    }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                         ContextCompat.checkSelfPermission(
                             this,
-                            android.Manifest.permission.POST_NOTIFICATIONS,
+                            Manifest.permission.POST_NOTIFICATIONS,
                         ) != PackageManager.PERMISSION_GRANTED
                     ) {
-                        permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
                     }
 
                     if (permissions.isNotEmpty()) {

@@ -30,7 +30,7 @@ class PaymentNotificationListener : NotificationListenerService() {
 
         val body = parts.joinToString("\n")
         if (!PaymentQueue.amountPattern.containsMatchIn(body) ||
-            !paymentKeywordPattern.containsMatchIn(body)
+            !PaymentQueue.paymentKeywordPattern.containsMatchIn(body)
         ) {
             return
         }
@@ -44,11 +44,6 @@ class PaymentNotificationListener : NotificationListenerService() {
     }
 
     companion object {
-        private val paymentKeywordPattern = Regex(
-            "승인|결제|사용|출금|입금|취소|환불|일시불|할부|체크카드|신용카드",
-            RegexOption.IGNORE_CASE,
-        )
-
         // 일반 SMS를 결제 Push로 오인하지 않도록 문자 앱 알림은 제외합니다.
         private val messagingPackages = setOf(
             "com.google.android.apps.messaging",

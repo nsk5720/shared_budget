@@ -12,11 +12,17 @@ import org.json.JSONArray
 object PaymentQueue {
     const val preferencesName = "shared_budget_sms"
     const val pendingQueueKey = "pending_sms_queue"
-    const val disclosureConsentKey = "payment_notification_disclosure_consent_v3"
+    const val disclosureConsentKey = "sms_push_disclosure_consent_v4"
     const val notificationChannelId = "payment_sms"
     const val notificationId = 2107
     const val openPaymentExtra = "open_pending_sms"
+    private const val lastAmountKey = "last_payment_amount"
+    private const val lastQueuedAtKey = "last_payment_queued_at"
     val amountPattern = Regex("""(?:₩\s*[\d,]+|[\d,]+\s*원)""")
+    val paymentKeywordPattern = Regex(
+        "승인|결제|사용|출금|입금|취소|환불|일시불|할부|체크카드|신용카드|이체",
+        RegexOption.IGNORE_CASE,
+    )
 
     fun enqueue(context: Context, source: String, body: String) {
         val value = "$source\n$body"
@@ -30,8 +36,22 @@ object PaymentQueue {
             }
         }
 
+        // 같은 결제가 SMS와 Push로 거의 동시에 도착하면 한 건만 남깁니다.
+        val amount = amountPattern.find(body)?.value?.filter { it.isDigit() }.orEmpty()
+        val now = System.currentTimeMillis()
+        val recentlyQueuedSameAmount = amount.isNotEmpty() &&
+            preferences.getString(lastAmountKey, null) == amount &&
+            now - preferences.getLong(lastQueuedAtKey, 0L) < 30_000L
+        if (recentlyQueuedSameAmount) {
+            return
+        }
+
         queue.put(value)
-        preferences.edit().putString(pendingQueueKey, queue.toString()).apply()
+        preferences.edit()
+            .putString(pendingQueueKey, queue.toString())
+            .putString(lastAmountKey, amount)
+            .putLong(lastQueuedAtKey, now)
+            .apply()
         showPendingNotification(context, body, queue.length())
     }
 
