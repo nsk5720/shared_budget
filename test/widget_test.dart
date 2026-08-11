@@ -33,6 +33,32 @@ void main() {
     expect(draft.category, '카페');
     expect(draft.date.month, 7);
     expect(draft.date.day, 30);
+    expect(draft.rawMessage, '[우리카드] 07/30 14:20 스타벅스 5,800원 승인');
+  });
+
+  testWidgets('문자 원문을 내역 메모에 자동 입력한다', (tester) async {
+    const rawMessage = '[우리카드] 07/30 14:20 스타벅스 5,800원 승인';
+    final draft = SmsTransactionDraft(
+      title: '스타벅스',
+      amount: 5800,
+      category: '카페',
+      date: DateTime(2026, 7, 30, 14, 20),
+      rawMessage: rawMessage,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AddTransactionSheet(
+            initialDraft: draft,
+            expenseCategories: defaultExpenseCategories,
+            incomeCategories: defaultIncomeCategories,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text(rawMessage), findsOneWidget);
   });
 
   test('전월 대비 증가와 감소 비율을 계산한다', () {

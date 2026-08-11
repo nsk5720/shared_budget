@@ -26,26 +26,31 @@ class MainActivity : FlutterActivity() {
         methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "requestSmsPermission" -> {
-                    val granted = ContextCompat.checkSelfPermission(
-                        this,
-                        Manifest.permission.RECEIVE_SMS,
-                    ) == PackageManager.PERMISSION_GRANTED
-
-                    if (!granted) {
-                        val permissions = mutableListOf(
+                    val permissions = mutableListOf<String>()
+                    if (ContextCompat.checkSelfPermission(
+                            this,
                             Manifest.permission.RECEIVE_SMS,
-                            Manifest.permission.READ_SMS,
-                        )
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-                        }
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        permissions.add(Manifest.permission.RECEIVE_SMS)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+
+                    if (permissions.isNotEmpty()) {
                         ActivityCompat.requestPermissions(
                             this,
                             permissions.toTypedArray(),
                             1001,
                         )
                     }
-                    result.success(granted)
+                    result.success(permissions.isEmpty())
                 }
 
                 "hasSmsPermission" -> {

@@ -2625,9 +2625,7 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
     _amountController = TextEditingController(
       text: draft == null ? '' : draft.amount.toString(),
     );
-    _memoController = TextEditingController(
-      text: draft == null ? '' : '문자 자동입력',
-    );
+    _memoController = TextEditingController(text: draft?.rawMessage ?? '');
     final suggestedCategory = draft?.category;
     _category =
         suggestedCategory != null &&
