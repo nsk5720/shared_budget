@@ -9,6 +9,20 @@ void main() {
     expect(find.text('로그인'), findsOneWidget);
     expect(find.text('이메일'), findsOneWidget);
     expect(find.text('비밀번호'), findsOneWidget);
+    expect(find.text('아이디 찾기'), findsOneWidget);
+    expect(find.text('비밀번호 재설정'), findsOneWidget);
+
+    await tester.tap(find.text('아이디 찾기'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('아이디는 회원가입할 때 사용한 이메일'), findsOneWidget);
+    await tester.tap(find.text('확인'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('비밀번호 재설정'));
+    await tester.pumpAndSettle();
+    expect(find.text('재설정 메일 보내기'), findsOneWidget);
+    await tester.tap(find.text('취소'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('처음이신가요? 회원가입'));
     await tester.pumpAndSettle();

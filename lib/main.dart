@@ -153,6 +153,139 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+  Future<void> _showFindId() {
+    final enteredEmail = _emailController.text.trim();
+    final hasValidEmail = RegExp(
+      r'^[^@]+@[^@]+\.[^@]+$',
+    ).hasMatch(enteredEmail);
+
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('아이디 찾기'),
+        content: Text(
+          '우리 가계부의 아이디는 회원가입할 때 사용한 이메일 주소입니다.\n\n'
+          '${hasValidEmail ? '현재 입력한 이메일: $enteredEmail\n\n' : ''}'
+          '휴대폰의 설정 → 계정 및 백업 → 계정 관리에서 본인이 사용하는 '
+          'Google 이메일을 확인해 보세요. 개인정보 보호를 위해 이름이나 '
+          '전화번호만으로 다른 사람의 이메일은 검색하지 않습니다.',
+          style: const TextStyle(height: 1.5),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showPasswordReset() async {
+    final resetEmailController = TextEditingController(
+      text: _emailController.text.trim(),
+    );
+    String? dialogError;
+    var isSending = false;
+
+    final sent = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('비밀번호 재설정'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                '가입한 이메일을 입력하면 비밀번호를 다시 설정할 수 있는 '
+                '메일을 보내드립니다.',
+                style: TextStyle(height: 1.5),
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                controller: resetEmailController,
+                enabled: !isSending,
+                autofocus: true,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.done,
+                decoration: const InputDecoration(
+                  labelText: '가입 이메일',
+                  prefixIcon: Icon(Icons.email_outlined),
+                ),
+              ),
+              if (dialogError != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  dialogError!,
+                  style: const TextStyle(color: Color(0xFFEF4444)),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSending
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: isSending
+                  ? null
+                  : () async {
+                      final email = resetEmailController.text.trim();
+                      if (!RegExp(r'^[^@]+@[^@]+\.[^@]+$').hasMatch(email)) {
+                        setDialogState(() => dialogError = '올바른 이메일을 입력해 주세요.');
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isSending = true;
+                        dialogError = null;
+                      });
+                      try {
+                        await FirebaseAuth.instance.sendPasswordResetEmail(
+                          email: email,
+                        );
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop(true);
+                        }
+                      } on FirebaseAuthException catch (error) {
+                        if (dialogContext.mounted) {
+                          setDialogState(() {
+                            isSending = false;
+                            dialogError = _passwordResetErrorMessage(
+                              error.code,
+                            );
+                          });
+                        }
+                      }
+                    },
+              child: isSending
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text('재설정 메일 보내기'),
+            ),
+          ],
+        ),
+      ),
+    );
+    resetEmailController.dispose();
+
+    if (sent == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('재설정 메일을 보냈습니다. 메일함과 스팸함을 확인해 주세요.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -243,6 +376,26 @@ class _LoginPageState extends State<LoginPage> {
                         return null;
                       },
                     ),
+                    if (!_isSignUp) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: _isLoading ? null : _showFindId,
+                            child: const Text('아이디 찾기'),
+                          ),
+                          const Text(
+                            '|',
+                            style: TextStyle(color: Color(0xFFD1D5DB)),
+                          ),
+                          TextButton(
+                            onPressed: _isLoading ? null : _showPasswordReset,
+                            child: const Text('비밀번호 재설정'),
+                          ),
+                        ],
+                      ),
+                    ],
                     if (_errorMessage != null) ...[
                       const SizedBox(height: 14),
                       Text(
@@ -297,6 +450,15 @@ class _LoginPageState extends State<LoginPage> {
       ),
     );
   }
+}
+
+String _passwordResetErrorMessage(String code) {
+  return switch (code) {
+    'invalid-email' => '올바른 이메일을 입력해 주세요.',
+    'too-many-requests' => '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.',
+    'network-request-failed' => '인터넷 연결을 확인해 주세요.',
+    _ => '메일을 보내지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  };
 }
 
 String _authErrorMessage(String code) {
