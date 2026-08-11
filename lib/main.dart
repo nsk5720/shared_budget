@@ -893,15 +893,6 @@ class _BudgetShellState extends State<BudgetShell> {
         _ledgerId = '';
       });
     }
-    _firestoreLoadingTimer = Timer(const Duration(seconds: 20), () {
-      if (mounted && _loadingTransactions) {
-        setState(() {
-          _loadingTransactions = false;
-          _connectionError = 'Firebase 응답이 늦습니다. 인터넷 연결을 확인하고 다시 시도해 주세요.';
-        });
-      }
-    });
-
     final database = FirebaseFirestore.instance;
     final user = widget.user;
     final inviteCode = user.uid.substring(0, 8).toUpperCase();
@@ -912,6 +903,18 @@ class _BudgetShellState extends State<BudgetShell> {
         .doc(personalLedgerId);
 
     try {
+      // 실제 휴대폰에 저장된 캐시가 있으면 서버 응답 전에 먼저 화면을 엽니다.
+      try {
+        final cachedLedger = await ledgerReference.get(
+          const GetOptions(source: Source.cache),
+        );
+        if (cachedLedger.exists) {
+          _activateLedger(cachedLedger);
+        }
+      } on FirebaseException {
+        // 첫 설치처럼 캐시가 없는 경우에는 아래 서버 설정을 계속 진행합니다.
+      }
+
       final setupBatch = database.batch();
       setupBatch.set(userReference, {
         'email': user.email,
@@ -950,6 +953,22 @@ class _BudgetShellState extends State<BudgetShell> {
             })
             .timeout(const Duration(seconds: 10));
       }
+
+      // 개인 가계부를 먼저 활성화해 거래 스트림이 즉시 시작되도록 합니다.
+      if (_ledgerId.isEmpty) {
+        _activateLedger(ledgerSnapshot);
+      }
+
+      _firestoreLoadingTimer?.cancel();
+      _firestoreLoadingTimer = Timer(const Duration(seconds: 20), () {
+        if (mounted && _loadingTransactions) {
+          setState(() {
+            _loadingTransactions = false;
+            _connectionError = '거래 내역을 불러오지 못했습니다. Firebase 연결을 다시 시도해 주세요.';
+          });
+        }
+      });
+
       _ledgerSubscription = database
           .collection('ledgers')
           .where('memberIds', arrayContains: user.uid)
