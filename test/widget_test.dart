@@ -152,4 +152,20 @@ void main() {
     expect(result.year, 2025);
     expect(result.month, 12);
   });
+
+  test('개인 가계부와 공동 가계부를 구분한다', () {
+    const personal = LedgerOption(
+      id: 'personal_user-a',
+      name: '내 가계부',
+      memberEmails: ['a@example.com'],
+    );
+    const shared = LedgerOption(
+      id: 'shared_invitation-a',
+      name: '공동 가계부',
+      memberEmails: ['a@example.com', 'b@example.com'],
+    );
+
+    expect(personal.isShared, isFalse);
+    expect(shared.isShared, isTrue);
+  });
 }

@@ -646,6 +646,20 @@ class BudgetTransaction {
   }
 }
 
+class LedgerOption {
+  const LedgerOption({
+    required this.id,
+    required this.name,
+    required this.memberEmails,
+  });
+
+  final String id;
+  final String name;
+  final List<String> memberEmails;
+
+  bool get isShared => id.startsWith('shared_');
+}
+
 class SmsTransactionDraft {
   const SmsTransactionDraft({
     required this.title,
@@ -833,6 +847,10 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   String _ledgerId = '';
   String _ledgerName = '내 가계부';
   List<String> _ledgerMemberEmails = [];
+  List<LedgerOption> _availableLedgers = [];
+  final Map<String, DocumentSnapshot<Map<String, dynamic>>> _ledgerDocuments =
+      {};
+  String? _preferredLedgerId;
 
   @override
   void initState() {
@@ -1011,6 +1029,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
       // 거래 읽기를 먼저 시작하고, 계정 메타데이터 저장은 뒤에서 처리합니다.
       _activateLedger(ledgerSnapshot);
+      unawaited(_loadPreferredLedger());
       unawaited(
         _syncAccountMetadata(
           database: database,
@@ -1040,6 +1059,27 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       _setConnectionError('Firebase 연결 중 문제가 발생했습니다. 다시 시도해 주세요.');
     } finally {
       _connectingFirestore = false;
+    }
+  }
+
+  Future<void> _loadPreferredLedger() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.user.uid)
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 10));
+      final preferredId = snapshot.data()?['activeLedgerId'] as String?;
+      if (preferredId == null || preferredId.isEmpty) {
+        return;
+      }
+      _preferredLedgerId = preferredId;
+      final document = _ledgerDocuments[preferredId];
+      if (document != null && mounted) {
+        _activateLedger(document);
+      }
+    } catch (error) {
+      debugPrint('Preferred ledger load failed: $error');
     }
   }
 
@@ -1095,30 +1135,117 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       return;
     }
 
-    final sharedLedgers =
-        snapshot.docs
-            .where((document) => document.id.startsWith('shared_'))
-            .toList()
-          ..sort((a, b) {
-            final aDate = a.data()['updatedAt'];
-            final bDate = b.data()['updatedAt'];
-            final aMilliseconds = aDate is Timestamp
-                ? aDate.millisecondsSinceEpoch
-                : 0;
-            final bMilliseconds = bDate is Timestamp
-                ? bDate.millisecondsSinceEpoch
-                : 0;
-            return bMilliseconds.compareTo(aMilliseconds);
-          });
+    final sortedDocuments = snapshot.docs.toList()
+      ..sort((a, b) {
+        final aShared = a.id.startsWith('shared_');
+        final bShared = b.id.startsWith('shared_');
+        if (aShared != bShared) {
+          return aShared ? 1 : -1;
+        }
+        final aDate = a.data()['updatedAt'];
+        final bDate = b.data()['updatedAt'];
+        final aMilliseconds = aDate is Timestamp
+            ? aDate.millisecondsSinceEpoch
+            : 0;
+        final bMilliseconds = bDate is Timestamp
+            ? bDate.millisecondsSinceEpoch
+            : 0;
+        return bMilliseconds.compareTo(aMilliseconds);
+      });
+
+    _ledgerDocuments
+      ..clear()
+      ..addEntries(
+        sortedDocuments.map((document) => MapEntry(document.id, document)),
+      );
+    final options = sortedDocuments.map((document) {
+      final data = document.data();
+      return LedgerOption(
+        id: document.id,
+        name:
+            data['name'] as String? ??
+            (document.id.startsWith('shared_') ? '공동 가계부' : '내 개인 가계부'),
+        memberEmails:
+            (data['memberEmails'] as List<dynamic>?)
+                ?.whereType<String>()
+                .toList() ??
+            const [],
+      );
+    }).toList();
+    if (mounted) {
+      setState(() => _availableLedgers = options);
+    }
 
     final personalLedgerId = 'personal_${widget.user.uid}';
-    final selected = sharedLedgers.isNotEmpty
-        ? sharedLedgers.first
-        : snapshot.docs.firstWhere(
-            (document) => document.id == personalLedgerId,
-            orElse: () => snapshot.docs.first,
-          );
+    final selected =
+        _ledgerDocuments[_preferredLedgerId] ??
+        _ledgerDocuments[_ledgerId] ??
+        _ledgerDocuments[personalLedgerId] ??
+        sortedDocuments.first;
     _activateLedger(selected);
+  }
+
+  void _switchLedger(String ledgerId) {
+    final document = _ledgerDocuments[ledgerId];
+    if (document == null || ledgerId == _ledgerId) {
+      return;
+    }
+    _preferredLedgerId = ledgerId;
+    _activateLedger(document);
+    unawaited(
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.user.uid)
+          .set({
+            'activeLedgerId': ledgerId,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true))
+          .timeout(const Duration(seconds: 15))
+          .catchError((Object error) {
+            debugPrint('Active ledger save failed: $error');
+          }),
+    );
+  }
+
+  Future<int> _importPersonalTransactions() async {
+    if (!_ledgerId.startsWith('shared_')) {
+      throw StateError('공동 가계부를 먼저 선택해 주세요.');
+    }
+    final database = FirebaseFirestore.instance;
+    final personalLedgerId = 'personal_${widget.user.uid}';
+    final source = await database
+        .collection('ledgers')
+        .doc(personalLedgerId)
+        .collection('transactions')
+        .get(const GetOptions(source: Source.server))
+        .timeout(const Duration(seconds: 20));
+    if (source.docs.isEmpty) {
+      return 0;
+    }
+
+    final target = database
+        .collection('ledgers')
+        .doc(_ledgerId)
+        .collection('transactions');
+    const batchSize = 400;
+    for (var start = 0; start < source.docs.length; start += batchSize) {
+      final end = (start + batchSize < source.docs.length)
+          ? start + batchSize
+          : source.docs.length;
+      final batch = database.batch();
+      for (final document in source.docs.sublist(start, end)) {
+        final importedId = 'import_${widget.user.uid}_${document.id}';
+        batch.set(target.doc(importedId), {
+          ...document.data(),
+          'importedFromLedgerId': personalLedgerId,
+          'importedFromTransactionId': document.id,
+          'importedBy': widget.user.uid,
+          'importedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      await batch.commit().timeout(const Duration(seconds: 30));
+    }
+    return source.docs.length;
   }
 
   void _activateLedger(DocumentSnapshot<Map<String, dynamic>> ledgerDocument) {
@@ -1594,6 +1721,9 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       TogetherPage(
         user: widget.user,
         onManageCategories: _openCategoryManager,
+        availableLedgers: _availableLedgers,
+        onSelectLedger: _switchLedger,
+        onImportPersonalTransactions: _importPersonalTransactions,
         ledgerId: _ledgerId,
         ledgerName: _ledgerName,
         memberEmails: _ledgerMemberEmails,
@@ -3023,6 +3153,9 @@ class TogetherPage extends StatefulWidget {
     super.key,
     required this.user,
     required this.onManageCategories,
+    required this.availableLedgers,
+    required this.onSelectLedger,
+    required this.onImportPersonalTransactions,
     required this.ledgerId,
     required this.ledgerName,
     required this.memberEmails,
@@ -3030,6 +3163,9 @@ class TogetherPage extends StatefulWidget {
 
   final User user;
   final VoidCallback onManageCategories;
+  final List<LedgerOption> availableLedgers;
+  final ValueChanged<String> onSelectLedger;
+  final Future<int> Function() onImportPersonalTransactions;
   final String ledgerId;
   final String ledgerName;
   final List<String> memberEmails;
@@ -3040,8 +3176,11 @@ class TogetherPage extends StatefulWidget {
 
 class _TogetherPageState extends State<TogetherPage> {
   bool _isWorking = false;
+  bool _isImporting = false;
 
   bool get _isShared => widget.ledgerId.startsWith('shared_');
+  bool get _hasSharedLedger =>
+      widget.availableLedgers.any((ledger) => ledger.isShared);
   String get _inviteCode => widget.user.uid.substring(0, 8).toUpperCase();
 
   void _showMessage(String message) {
@@ -3074,6 +3213,52 @@ class _TogetherPageState extends State<TogetherPage> {
 
     if (shouldSignOut == true) {
       await FirebaseAuth.instance.signOut();
+    }
+  }
+
+  Future<void> _importPersonalTransactions() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('개인 내역을 가져올까요?'),
+        content: const Text(
+          '개인 가계부의 내역을 현재 공동 가계부로 복사합니다.\n\n'
+          '개인 가계부의 원본은 그대로 남으며, 같은 내역을 다시 가져와도 '
+          '중복 문서가 생성되지 않습니다.',
+          style: TextStyle(height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('가져오기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || _isImporting) {
+      return;
+    }
+
+    setState(() => _isImporting = true);
+    try {
+      final count = await widget.onImportPersonalTransactions();
+      _showMessage(
+        count == 0 ? '개인 가계부에 가져올 내역이 없습니다.' : '개인 내역 $count건을 가져왔습니다.',
+      );
+    } on FirebaseException catch (error) {
+      _showMessage(_firestoreErrorMessage(error));
+    } on TimeoutException {
+      _showMessage('내역 가져오기 시간이 초과되었습니다. 인터넷을 확인해 주세요.');
+    } on StateError catch (error) {
+      _showMessage(error.message.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _isImporting = false);
+      }
     }
   }
 
@@ -3243,6 +3428,7 @@ class _TogetherPageState extends State<TogetherPage> {
         'sourceInvitationId': invitation.id,
         'expenseCategories': defaultExpenseCategories,
         'incomeCategories': defaultIncomeCategories,
+        'categoryIcons': defaultCategoryIconKeys,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
@@ -3487,6 +3673,65 @@ class _TogetherPageState extends State<TogetherPage> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (widget.availableLedgers.isNotEmpty) ...[
+                          const Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              '사용할 가계부',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 9),
+                          DropdownButtonFormField<String>(
+                            key: ValueKey(widget.ledgerId),
+                            initialValue:
+                                widget.availableLedgers.any(
+                                  (ledger) => ledger.id == widget.ledgerId,
+                                )
+                                ? widget.ledgerId
+                                : null,
+                            decoration: const InputDecoration(
+                              prefixIcon: Icon(Icons.swap_horiz_rounded),
+                            ),
+                            items: widget.availableLedgers.map((ledger) {
+                              final partners = ledger.memberEmails
+                                  .where((email) => email != widget.user.email)
+                                  .join(', ');
+                              final label = ledger.isShared
+                                  ? '${ledger.name}${partners.isEmpty ? '' : ' · $partners'}'
+                                  : '내 개인 가계부';
+                              return DropdownMenuItem(
+                                value: ledger.id,
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      ledger.isShared
+                                          ? Icons.people_rounded
+                                          : Icons.person_rounded,
+                                      size: 19,
+                                    ),
+                                    const SizedBox(width: 9),
+                                    Flexible(
+                                      child: Text(
+                                        label,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (ledgerId) {
+                              if (ledgerId != null) {
+                                widget.onSelectLedger(ledgerId);
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 28),
+                        ],
                         Container(
                           width: 76,
                           height: 76,
@@ -3499,6 +3744,8 @@ class _TogetherPageState extends State<TogetherPage> {
                           child: Icon(
                             _isShared
                                 ? Icons.people_rounded
+                                : _hasSharedLedger
+                                ? Icons.person_rounded
                                 : Icons.group_add_rounded,
                             size: 34,
                             color: Theme.of(context).colorScheme.primary,
@@ -3506,7 +3753,11 @@ class _TogetherPageState extends State<TogetherPage> {
                         ),
                         const SizedBox(height: 20),
                         Text(
-                          _isShared ? '함께 사용 중' : '함께할 사람을 초대해요',
+                          _isShared
+                              ? '공동 가계부 연결 완료'
+                              : _hasSharedLedger
+                              ? '개인 가계부 사용 중'
+                              : '함께할 사람을 초대해요',
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w800,
@@ -3516,6 +3767,8 @@ class _TogetherPageState extends State<TogetherPage> {
                         Text(
                           _isShared
                               ? '$partnerName 님과 같은 내역을 보고 있어요.'
+                              : _hasSharedLedger
+                              ? '위 메뉴에서 개인 가계부와 공동 가계부를 전환할 수 있어요.'
                               : '상대방의 초대 코드를 입력하면\n승인 요청이 전송됩니다.',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
@@ -3530,6 +3783,24 @@ class _TogetherPageState extends State<TogetherPage> {
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.primary,
                               fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          FilledButton.tonalIcon(
+                            onPressed: _isImporting
+                                ? null
+                                : _importPersonalTransactions,
+                            icon: _isImporting
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.download_rounded),
+                            label: Text(
+                              _isImporting ? '가져오는 중...' : '기존 개인 내역 가져오기',
                             ),
                           ),
                         ],
@@ -3556,8 +3827,7 @@ class _TogetherPageState extends State<TogetherPage> {
                                   fontWeight: FontWeight.w800,
                                 ),
                               ),
-                              IconButton(
-                                visualDensity: VisualDensity.compact,
+                              TextButton.icon(
                                 onPressed: () async {
                                   await Clipboard.setData(
                                     ClipboardData(text: _inviteCode),
@@ -3565,7 +3835,7 @@ class _TogetherPageState extends State<TogetherPage> {
                                   _showMessage('초대 코드를 복사했습니다.');
                                 },
                                 icon: const Icon(Icons.copy_rounded, size: 18),
-                                tooltip: '초대 코드 복사',
+                                label: const Text('공유'),
                               ),
                             ],
                           ),
