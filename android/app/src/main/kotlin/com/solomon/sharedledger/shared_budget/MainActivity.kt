@@ -101,6 +101,17 @@ class MainActivity : FlutterActivity() {
                     result.success(if (queue.length() > 0) queue.getString(0) else null)
                 }
 
+                "getPendingPaymentCount" -> {
+                    val preferences = getSharedPreferences(
+                        PaymentQueue.preferencesName,
+                        MODE_PRIVATE,
+                    )
+                    val queue = JSONArray(
+                        preferences.getString(PaymentQueue.pendingQueueKey, "[]"),
+                    )
+                    result.success(queue.length())
+                }
+
                 "clearPendingSms" -> {
                     val preferences = getSharedPreferences(
                         PaymentQueue.preferencesName,

@@ -36,6 +36,20 @@ void main() {
     expect(formatWon(-12500), '-12,500');
   });
 
+  test('금액 입력 중 천 단위 쉼표를 자동 적용한다', () {
+    final result = WonAmountInputFormatter().formatEditUpdate(
+      TextEditingValue.empty,
+      const TextEditingValue(text: '1234567'),
+    );
+
+    expect(result.text, '1,234,567');
+    expect(result.selection.baseOffset, 9);
+  });
+
+  test('사용자가 선택한 분류 아이콘을 표시한다', () {
+    expect(categoryIcon('반려동물', const {'반려동물': 'pet'}), Icons.pets_rounded);
+  });
+
   test('카드 문자에서 거래 초안을 만든다', () {
     final draft = SmsTransactionParser.parse(
       '15881234\n[우리카드] 07/30 14:20 스타벅스 5,800원 승인',
@@ -97,6 +111,33 @@ void main() {
     );
 
     expect(find.text(rawMessage), findsOneWidget);
+  });
+
+  testWidgets('기존 내역 수정 화면에 금액을 쉼표로 표시한다', (tester) async {
+    final transaction = BudgetTransaction(
+      id: 'transaction-1',
+      title: '대형마트',
+      category: '식비',
+      amount: 1234567,
+      type: TransactionType.expense,
+      date: DateTime(2026, 8, 11),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AddTransactionSheet(
+            initialTransaction: transaction,
+            expenseCategories: defaultExpenseCategories,
+            incomeCategories: defaultIncomeCategories,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('내역 수정'), findsOneWidget);
+    expect(find.text('1,234,567'), findsOneWidget);
+    expect(find.text('수정 완료'), findsOneWidget);
   });
 
   test('전월 대비 증가와 감소 비율을 계산한다', () {

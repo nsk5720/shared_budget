@@ -565,6 +565,44 @@ const defaultExpenseCategories = ['식비', '카페', '교통', '쇼핑', '생�
 
 const defaultIncomeCategories = ['급여', '용돈', '부수입', '기타'];
 
+const defaultCategoryIconKeys = <String, String>{
+  '식비': 'restaurant',
+  '카페': 'cafe',
+  '교통': 'bus',
+  '쇼핑': 'shopping',
+  '생활': 'home',
+  '의료': 'medical',
+  '기타': 'more',
+  '급여': 'bank',
+  '용돈': 'savings',
+  '부수입': 'trending',
+};
+
+const categoryIconChoices = <String, IconData>{
+  'restaurant': Icons.restaurant_rounded,
+  'cafe': Icons.local_cafe_rounded,
+  'bus': Icons.directions_bus_rounded,
+  'shopping': Icons.shopping_bag_rounded,
+  'home': Icons.home_rounded,
+  'medical': Icons.local_hospital_rounded,
+  'bank': Icons.account_balance_rounded,
+  'savings': Icons.savings_rounded,
+  'trending': Icons.trending_up_rounded,
+  'pet': Icons.pets_rounded,
+  'school': Icons.school_rounded,
+  'flight': Icons.flight_rounded,
+  'gift': Icons.card_giftcard_rounded,
+  'fitness': Icons.fitness_center_rounded,
+  'phone': Icons.phone_android_rounded,
+  'car': Icons.directions_car_rounded,
+  'game': Icons.sports_esports_rounded,
+  'more': Icons.more_horiz_rounded,
+};
+
+final Map<String, String> _runtimeCategoryIconKeys = {
+  ...defaultCategoryIconKeys,
+};
+
 class BudgetTransaction {
   BudgetTransaction({
     required this.id,
@@ -584,17 +622,27 @@ class BudgetTransaction {
   final DateTime date;
   final String memo;
 
-  Map<String, Object?> toFirestore(String userId) {
-    return {
+  Map<String, Object?> toFirestore(
+    String userId, {
+    bool includeCreatedAt = true,
+    bool includeCreatedBy = true,
+  }) {
+    final data = <String, Object?>{
       'title': title,
       'category': category,
       'amount': amount,
       'type': type.name,
       'date': Timestamp.fromDate(date),
       'memo': memo,
-      'createdBy': userId,
-      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
     };
+    if (includeCreatedBy) {
+      data['createdBy'] = userId;
+    }
+    if (includeCreatedAt) {
+      data['createdAt'] = FieldValue.serverTimestamp();
+    }
+    return data;
   }
 }
 
@@ -746,6 +794,10 @@ class SmsPlatformService {
     return _channel.invokeMethod<String>('getPendingSms');
   }
 
+  static Future<int> getPendingPaymentCount() async {
+    return await _channel.invokeMethod<int>('getPendingPaymentCount') ?? 0;
+  }
+
   static Future<int> clearPendingSms() async {
     return await _channel.invokeMethod<int>('clearPendingSms') ?? 0;
   }
@@ -760,11 +812,12 @@ class BudgetShell extends StatefulWidget {
   State<BudgetShell> createState() => _BudgetShellState();
 }
 
-class _BudgetShellState extends State<BudgetShell> {
+class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   int _currentIndex = 0;
   bool _checkingSms = false;
   bool _loadingTransactions = true;
   bool _connectingFirestore = false;
+  int _pendingPaymentCount = 0;
   String? _connectionError;
   String? _lastPresentedSms;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
@@ -776,6 +829,7 @@ class _BudgetShellState extends State<BudgetShell> {
   final List<BudgetTransaction> _transactions = [];
   List<String> _expenseCategories = [...defaultExpenseCategories];
   List<String> _incomeCategories = [...defaultIncomeCategories];
+  Map<String, String> _categoryIconKeys = {...defaultCategoryIconKeys};
   String _ledgerId = '';
   String _ledgerName = '내 가계부';
   List<String> _ledgerMemberEmails = [];
@@ -783,6 +837,7 @@ class _BudgetShellState extends State<BudgetShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _connectFirestore();
     SmsPlatformService.setNotificationTapHandler(() async {
       _lastPresentedSms = null;
@@ -791,11 +846,19 @@ class _BudgetShellState extends State<BudgetShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         await _prepareSmsAccess();
+        await _refreshPendingPaymentCount();
         await _checkPendingSms();
       } on MissingPluginException {
         // iOS와 위젯 테스트에서는 Android 문자 채널을 사용하지 않습니다.
       }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshPendingPaymentCount();
+    }
   }
 
   Future<void> _prepareSmsAccess() async {
@@ -929,6 +992,7 @@ class _BudgetShellState extends State<BudgetShell> {
               'createdBy': user.uid,
               'expenseCategories': defaultExpenseCategories,
               'incomeCategories': defaultIncomeCategories,
+              'categoryIcons': defaultCategoryIconKeys,
               'updatedAt': FieldValue.serverTimestamp(),
             })
             .timeout(const Duration(seconds: 15));
@@ -1108,6 +1172,8 @@ class _BudgetShellState extends State<BudgetShell> {
               ?.whereType<String>()
               .toList() ??
           [];
+      final iconKeys = (ledgerData['categoryIcons'] as Map<String, dynamic>?)
+          ?.map((key, value) => MapEntry(key, value.toString()));
       setState(() {
         _ledgerName = ledgerData['name'] as String? ?? '우리 가계부';
         _ledgerMemberEmails = emails;
@@ -1117,6 +1183,10 @@ class _BudgetShellState extends State<BudgetShell> {
         _incomeCategories = incomes == null || incomes.isEmpty
             ? [...defaultIncomeCategories]
             : incomes;
+        _categoryIconKeys = {...defaultCategoryIconKeys, ...?iconKeys};
+        _runtimeCategoryIconKeys
+          ..clear()
+          ..addAll(_categoryIconKeys);
       });
     });
 
@@ -1162,6 +1232,7 @@ class _BudgetShellState extends State<BudgetShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _transactionSubscription?.cancel();
     _ledgerSubscription?.cancel();
     _categorySubscription?.cancel();
@@ -1174,6 +1245,55 @@ class _BudgetShellState extends State<BudgetShell> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _refreshPendingPaymentCount() async {
+    try {
+      final count = await SmsPlatformService.getPendingPaymentCount();
+      if (mounted) {
+        setState(() => _pendingPaymentCount = count);
+      }
+    } on PlatformException {
+      // Android 외 플랫폼에서는 자동등록 대기 건수를 표시하지 않습니다.
+    }
+  }
+
+  Future<void> _openPendingPayments() async {
+    await _refreshPendingPaymentCount();
+    if (!mounted) {
+      return;
+    }
+    if (_pendingPaymentCount > 0) {
+      _lastPresentedSms = null;
+      await _checkPendingSms();
+      return;
+    }
+
+    final openSettings = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('자동등록 알림함'),
+        content: const Text(
+          '현재 확인할 결제 문자·Push가 없습니다.\n\n'
+          '금액과 승인·결제·입금·출금 같은 단어가 포함된 새 알림이 오면 '
+          '여기에 저장 대기 건수가 표시됩니다.',
+          style: TextStyle(height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('알림 접근 설정'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+    if (openSettings == true) {
+      await SmsPlatformService.openNotificationAccessSettings();
+    }
+  }
+
   Future<void> _checkPendingSms() async {
     if (_checkingSms || !mounted) {
       return;
@@ -1183,6 +1303,9 @@ class _BudgetShellState extends State<BudgetShell> {
     try {
       final rawSms = await SmsPlatformService.getPendingSms();
       if (rawSms == null || rawSms.trim().isEmpty) {
+        if (mounted) {
+          setState(() => _pendingPaymentCount = 0);
+        }
         return;
       }
       if (_lastPresentedSms == rawSms) {
@@ -1197,6 +1320,7 @@ class _BudgetShellState extends State<BudgetShell> {
 
       if (draft == null) {
         await SmsPlatformService.clearPendingSms();
+        await _refreshPendingPaymentCount();
         if (!mounted) {
           return;
         }
@@ -1212,6 +1336,7 @@ class _BudgetShellState extends State<BudgetShell> {
       final saved = await _openAddTransaction(draft: draft);
       if (saved) {
         await SmsPlatformService.clearPendingSms();
+        await _refreshPendingPaymentCount();
         _lastPresentedSms = null;
         _checkingSms = false;
         await _checkPendingSms();
@@ -1268,9 +1393,154 @@ class _BudgetShellState extends State<BudgetShell> {
     return false;
   }
 
+  Future<void> _openTransactionActions(BudgetTransaction transaction) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: CircleAvatar(
+                  child: Icon(categoryIcon(transaction.category)),
+                ),
+                title: Text(
+                  transaction.title,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text('${formatWon(transaction.amount)}원'),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.edit_rounded),
+                title: const Text('수정하기'),
+                onTap: () => Navigator.of(sheetContext).pop('edit'),
+              ),
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Color(0xFFDC2626),
+                ),
+                title: const Text(
+                  '삭제하기',
+                  style: TextStyle(color: Color(0xFFDC2626)),
+                ),
+                onTap: () => Navigator.of(sheetContext).pop('delete'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (action == 'edit') {
+      await _openEditTransaction(transaction);
+    } else if (action == 'delete') {
+      await _confirmDeleteTransaction(transaction);
+    }
+  }
+
+  Future<void> _openEditTransaction(BudgetTransaction transaction) async {
+    final edited = await showModalBottomSheet<BudgetTransaction>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => AddTransactionSheet(
+        initialTransaction: transaction,
+        expenseCategories: _expenseCategories,
+        incomeCategories: _incomeCategories,
+      ),
+    );
+    if (edited == null || _ledgerId.isEmpty) {
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('ledgers')
+          .doc(_ledgerId)
+          .collection('transactions')
+          .doc(transaction.id)
+          .update(
+            edited.toFirestore(
+              widget.user.uid,
+              includeCreatedAt: false,
+              includeCreatedBy: false,
+            ),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (mounted) {
+        _showMessage('내역을 수정했습니다.');
+      }
+    } on FirebaseException catch (error) {
+      if (mounted) {
+        _showMessage(_firestoreErrorMessage(error));
+      }
+    } on TimeoutException {
+      if (mounted) {
+        _showMessage('수정 시간이 초과되었습니다. 인터넷 연결을 확인해 주세요.');
+      }
+    }
+  }
+
+  Future<void> _confirmDeleteTransaction(BudgetTransaction transaction) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('내역을 삭제할까요?'),
+        content: Text(
+          '${transaction.title} · ${formatWon(transaction.amount)}원\n'
+          '삭제한 내역은 되돌릴 수 없습니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || _ledgerId.isEmpty) {
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('ledgers')
+          .doc(_ledgerId)
+          .collection('transactions')
+          .doc(transaction.id)
+          .delete()
+          .timeout(const Duration(seconds: 15));
+      if (mounted) {
+        _showMessage('내역을 삭제했습니다.');
+      }
+    } on FirebaseException catch (error) {
+      if (mounted) {
+        _showMessage(_firestoreErrorMessage(error));
+      }
+    } on TimeoutException {
+      if (mounted) {
+        _showMessage('삭제 시간이 초과되었습니다. 인터넷 연결을 확인해 주세요.');
+      }
+    }
+  }
+
   Future<void> _saveCategories({
     required List<String> expenses,
     required List<String> incomes,
+    required Map<String, String> icons,
   }) async {
     await FirebaseFirestore.instance
         .collection('ledgers')
@@ -1278,8 +1548,14 @@ class _BudgetShellState extends State<BudgetShell> {
         .update({
           'expenseCategories': expenses,
           'incomeCategories': incomes,
+          'categoryIcons': icons,
           'updatedAt': FieldValue.serverTimestamp(),
-        });
+        })
+        .timeout(const Duration(seconds: 15));
+    _categoryIconKeys = {...icons};
+    _runtimeCategoryIconKeys
+      ..clear()
+      ..addAll(icons);
   }
 
   Future<void> _openCategoryManager() async {
@@ -1288,6 +1564,7 @@ class _BudgetShellState extends State<BudgetShell> {
         builder: (context) => CategoryManagerPage(
           expenseCategories: _expenseCategories,
           incomeCategories: _incomeCategories,
+          categoryIcons: _categoryIconKeys,
           onSave: _saveCategories,
         ),
       ),
@@ -1297,10 +1574,18 @@ class _BudgetShellState extends State<BudgetShell> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      HomePage(transactions: _transactions, isLoading: _loadingTransactions),
+      HomePage(
+        transactions: _transactions,
+        isLoading: _loadingTransactions,
+        pendingPaymentCount: _pendingPaymentCount,
+        onNotificationsPressed: _openPendingPayments,
+        onViewAll: () => setState(() => _currentIndex = 1),
+        onTransactionTap: _openTransactionActions,
+      ),
       TransactionsPage(
         transactions: _transactions,
         isLoading: _loadingTransactions,
+        onTransactionTap: _openTransactionActions,
       ),
       StatisticsPage(
         transactions: _transactions,
@@ -1425,10 +1710,18 @@ class HomePage extends StatelessWidget {
     super.key,
     required this.transactions,
     required this.isLoading,
+    required this.pendingPaymentCount,
+    required this.onNotificationsPressed,
+    required this.onViewAll,
+    required this.onTransactionTap,
   });
 
   final List<BudgetTransaction> transactions;
   final bool isLoading;
+  final int pendingPaymentCount;
+  final VoidCallback onNotificationsPressed;
+  final VoidCallback onViewAll;
+  final ValueChanged<BudgetTransaction> onTransactionTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1442,6 +1735,16 @@ class HomePage extends StatelessWidget {
     final expense = monthlyTransactions
         .where((item) => item.type == TransactionType.expense)
         .fold<int>(0, (total, item) => total + item.amount);
+    final todayExpense = transactions
+        .where(
+          (item) =>
+              item.type == TransactionType.expense &&
+              item.date.year == now.year &&
+              item.date.month == now.month &&
+              item.date.day == now.day,
+        )
+        .fold<int>(0, (total, item) => total + item.amount);
+    final averageDailyExpense = now.day == 0 ? 0 : (expense / now.day).round();
 
     return SafeArea(
       child: CustomScrollView(
@@ -1450,14 +1753,39 @@ class HomePage extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
             sliver: SliverList.list(
               children: [
-                const _HomeHeader(),
+                _HomeHeader(
+                  pendingPaymentCount: pendingPaymentCount,
+                  onNotificationsPressed: onNotificationsPressed,
+                ),
                 const SizedBox(height: 22),
                 _SummaryCard(
                   income: income,
                   expense: expense,
                   month: now.month,
                 ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _HomeInsightCard(
+                        label: '오늘 지출',
+                        value: '${formatWon(todayExpense)}원',
+                        icon: Icons.today_rounded,
+                        color: const Color(0xFFEA580C),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _HomeInsightCard(
+                        label: '하루 평균',
+                        value: '${formatWon(averageDailyExpense)}원',
+                        icon: Icons.insights_rounded,
+                        color: const Color(0xFF2563EB),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 26),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -1467,12 +1795,7 @@ class HomePage extends StatelessWidget {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    Text(
-                      '${transactions.length}건',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
+                    TextButton(onPressed: onViewAll, child: const Text('전체보기')),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -1493,7 +1816,11 @@ class HomePage extends StatelessWidget {
                 : SliverList.separated(
                     itemCount: transactions.take(5).length,
                     itemBuilder: (context, index) {
-                      return TransactionTile(transaction: transactions[index]);
+                      final transaction = transactions[index];
+                      return TransactionTile(
+                        transaction: transaction,
+                        onTap: () => onTransactionTap(transaction),
+                      );
                     },
                     separatorBuilder: (_, _) => const SizedBox(height: 10),
                   ),
@@ -1505,7 +1832,13 @@ class HomePage extends StatelessWidget {
 }
 
 class _HomeHeader extends StatelessWidget {
-  const _HomeHeader();
+  const _HomeHeader({
+    required this.pendingPaymentCount,
+    required this.onNotificationsPressed,
+  });
+
+  final int pendingPaymentCount;
+  final VoidCallback onNotificationsPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -1540,12 +1873,104 @@ class _HomeHeader extends StatelessWidget {
             ],
           ),
         ),
-        IconButton(
-          onPressed: () {},
-          icon: const Icon(Icons.notifications_none_rounded),
-          tooltip: '알림',
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            IconButton.filledTonal(
+              onPressed: onNotificationsPressed,
+              icon: const Icon(Icons.notifications_none_rounded),
+              tooltip: '자동등록 알림함',
+            ),
+            if (pendingPaymentCount > 0)
+              Positioned(
+                right: -2,
+                top: -4,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 20),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEF4444),
+                    borderRadius: BorderRadius.circular(99),
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: Text(
+                    pendingPaymentCount > 99 ? '99+' : '$pendingPaymentCount',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ],
+    );
+  }
+}
+
+class _HomeInsightCard extends StatelessWidget {
+  const _HomeInsightCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFF0F1F5)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(icon, color: color, size: 19),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Color(0xFF6B7280),
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1678,10 +2103,12 @@ class TransactionsPage extends StatefulWidget {
     super.key,
     required this.transactions,
     required this.isLoading,
+    required this.onTransactionTap,
   });
 
   final List<BudgetTransaction> transactions;
   final bool isLoading;
+  final ValueChanged<BudgetTransaction> onTransactionTap;
 
   @override
   State<TransactionsPage> createState() => _TransactionsPageState();
@@ -1797,6 +2224,8 @@ class _TransactionsPageState extends State<TransactionsPage> {
                                 child: TransactionTile(
                                   transaction: transaction,
                                   showDate: false,
+                                  onTap: () =>
+                                      widget.onTransactionTap(transaction),
                                 ),
                               ),
                             ),
@@ -2176,10 +2605,12 @@ class TransactionTile extends StatelessWidget {
     super.key,
     required this.transaction,
     this.showDate = true,
+    this.onTap,
   });
 
   final BudgetTransaction transaction;
   final bool showDate;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2188,58 +2619,74 @@ class TransactionTile extends StatelessWidget {
     final icon = categoryIcon(transaction.category);
 
     return Card(
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: Padding(
-        padding: const EdgeInsets.all(15),
-        child: Row(
-          children: [
-            Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(15),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: color, size: 22),
               ),
-              child: Icon(icon, color: color, size: 22),
-            ),
-            const SizedBox(width: 13),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      transaction.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      showDate
+                          ? '${transaction.category} · '
+                                '${formatDate(transaction.date)}'
+                          : transaction.category,
+                      style: const TextStyle(
+                        color: Color(0xFF9CA3AF),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    transaction.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
+                    '${isExpense ? '-' : '+'}${formatWon(transaction.amount)}원',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    showDate
-                        ? '${transaction.category} · '
-                              '${formatDate(transaction.date)}'
-                        : transaction.category,
-                    style: const TextStyle(
-                      color: Color(0xFF9CA3AF),
-                      fontSize: 13,
+                  if (onTap != null) ...[
+                    const SizedBox(height: 3),
+                    const Text(
+                      '눌러서 관리',
+                      style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 10),
                     ),
-                  ),
+                  ],
                 ],
               ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '${isExpense ? '-' : '+'}${formatWon(transaction.amount)}원',
-              style: TextStyle(
-                color: color,
-                fontSize: 15,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2278,14 +2725,17 @@ class CategoryManagerPage extends StatefulWidget {
     super.key,
     required this.expenseCategories,
     required this.incomeCategories,
+    required this.categoryIcons,
     required this.onSave,
   });
 
   final List<String> expenseCategories;
   final List<String> incomeCategories;
+  final Map<String, String> categoryIcons;
   final Future<void> Function({
     required List<String> expenses,
     required List<String> incomes,
+    required Map<String, String> icons,
   })
   onSave;
 
@@ -2297,6 +2747,8 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
   final _controller = TextEditingController();
   late List<String> _expenses;
   late List<String> _incomes;
+  late Map<String, String> _icons;
+  String _newCategoryIconKey = 'more';
   TransactionType _selectedType = TransactionType.expense;
   bool _saving = false;
 
@@ -2309,6 +2761,7 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
     super.initState();
     _expenses = [...widget.expenseCategories];
     _incomes = [...widget.incomeCategories];
+    _icons = {...defaultCategoryIconKeys, ...widget.categoryIcons};
   }
 
   @override
@@ -2330,7 +2783,9 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
     }
     setState(() {
       _selectedCategories.add(category);
+      _icons[category] = _newCategoryIconKey;
       _controller.clear();
+      _newCategoryIconKey = 'more';
     });
   }
 
@@ -2341,7 +2796,69 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
       ).showSnackBar(const SnackBar(content: Text('분류를 한 개 이상 남겨주세요.')));
       return;
     }
-    setState(() => _selectedCategories.remove(category));
+    setState(() {
+      _selectedCategories.remove(category);
+      if (!_expenses.contains(category) && !_incomes.contains(category)) {
+        _icons.remove(category);
+      }
+    });
+  }
+
+  Future<void> _pickIcon({String? category}) async {
+    final currentKey = category == null
+        ? _newCategoryIconKey
+        : _icons[category] ?? defaultCategoryIconKeys[category] ?? 'more';
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(category == null ? '새 분류 아이콘' : '$category 아이콘'),
+        content: SizedBox(
+          width: 320,
+          child: GridView.count(
+            shrinkWrap: true,
+            crossAxisCount: 4,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            children: categoryIconChoices.entries.map((entry) {
+              final isSelected = entry.key == currentKey;
+              return InkWell(
+                onTap: () => Navigator.of(dialogContext).pop(entry.key),
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(14),
+                    border: isSelected
+                        ? Border.all(
+                            color: Theme.of(context).colorScheme.primary,
+                            width: 2,
+                          )
+                        : null,
+                  ),
+                  child: Icon(
+                    entry.value,
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primary
+                        : const Color(0xFF4B5563),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+    if (selected != null && mounted) {
+      setState(() {
+        if (category == null) {
+          _newCategoryIconKey = selected;
+        } else {
+          _icons[category] = selected;
+        }
+      });
+    }
   }
 
   Future<void> _save() async {
@@ -2350,7 +2867,11 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
     }
     setState(() => _saving = true);
     try {
-      await widget.onSave(expenses: _expenses, incomes: _incomes);
+      await widget.onSave(
+        expenses: _expenses,
+        incomes: _incomes,
+        icons: _icons,
+      );
       if (mounted) {
         Navigator.of(context).pop();
       }
@@ -2420,6 +2941,15 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
               const SizedBox(height: 18),
               Row(
                 children: [
+                  IconButton.filledTonal(
+                    onPressed: () => _pickIcon(),
+                    icon: Icon(
+                      categoryIconChoices[_newCategoryIconKey] ??
+                          Icons.more_horiz_rounded,
+                    ),
+                    tooltip: '새 분류 아이콘 선택',
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: TextField(
                       controller: _controller,
@@ -2461,7 +2991,11 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: ListTile(
-                        leading: Icon(categoryIcon(category)),
+                        leading: IconButton.filledTonal(
+                          onPressed: () => _pickIcon(category: category),
+                          icon: Icon(categoryIcon(category, _icons)),
+                          tooltip: '아이콘 변경',
+                        ),
                         title: Text(
                           category,
                           style: const TextStyle(fontWeight: FontWeight.w700),
@@ -3101,11 +3635,13 @@ class AddTransactionSheet extends StatefulWidget {
   const AddTransactionSheet({
     super.key,
     this.initialDraft,
+    this.initialTransaction,
     required this.expenseCategories,
     required this.incomeCategories,
   });
 
   final SmsTransactionDraft? initialDraft;
+  final BudgetTransaction? initialTransaction;
   final List<String> expenseCategories;
   final List<String> incomeCategories;
 
@@ -3133,13 +3669,19 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
   void initState() {
     super.initState();
     final draft = widget.initialDraft;
-    _type = draft?.type ?? TransactionType.expense;
-    _titleController = TextEditingController(text: draft?.title ?? '');
-    _amountController = TextEditingController(
-      text: draft == null ? '' : draft.amount.toString(),
+    final transaction = widget.initialTransaction;
+    _type = transaction?.type ?? draft?.type ?? TransactionType.expense;
+    _titleController = TextEditingController(
+      text: transaction?.title ?? draft?.title ?? '',
     );
-    _memoController = TextEditingController(text: draft?.rawMessage ?? '');
-    final suggestedCategory = draft?.category;
+    final initialAmount = transaction?.amount ?? draft?.amount;
+    _amountController = TextEditingController(
+      text: initialAmount == null ? '' : formatWon(initialAmount),
+    );
+    _memoController = TextEditingController(
+      text: transaction?.memo ?? draft?.rawMessage ?? '',
+    );
+    final suggestedCategory = transaction?.category ?? draft?.category;
     final availableCategories = _type == TransactionType.expense
         ? widget.expenseCategories
         : widget.incomeCategories;
@@ -3148,7 +3690,7 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
             availableCategories.contains(suggestedCategory)
         ? suggestedCategory
         : availableCategories.first;
-    _date = draft?.date ?? DateTime.now();
+    _date = transaction?.date ?? draft?.date ?? DateTime.now();
   }
 
   @override
@@ -3199,7 +3741,9 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
     final amount = int.parse(_amountController.text.replaceAll(',', ''));
     Navigator.of(context).pop(
       BudgetTransaction(
-        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        id:
+            widget.initialTransaction?.id ??
+            DateTime.now().microsecondsSinceEpoch.toString(),
         title: _titleController.text.trim(),
         category: _category,
         amount: amount,
@@ -3241,8 +3785,8 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                const Text(
-                  '내역 추가',
+                Text(
+                  widget.initialTransaction == null ? '내역 추가' : '내역 수정',
                   style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900),
                 ),
                 const SizedBox(height: 18),
@@ -3315,14 +3859,16 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                   controller: _amountController,
                   keyboardType: TextInputType.number,
                   textInputAction: TextInputAction.next,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  inputFormatters: [WonAmountInputFormatter()],
                   decoration: const InputDecoration(
                     hintText: '0',
                     suffixText: '원',
                     prefixIcon: Icon(Icons.payments_outlined),
                   ),
                   validator: (value) {
-                    final amount = int.tryParse(value ?? '');
+                    final amount = int.tryParse(
+                      (value ?? '').replaceAll(',', ''),
+                    );
                     if (amount == null || amount <= 0) {
                       return '금액을 입력해 주세요.';
                     }
@@ -3369,9 +3915,9 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                   height: 54,
                   child: FilledButton(
                     onPressed: _save,
-                    child: const Text(
-                      '저장하기',
-                      style: TextStyle(
+                    child: Text(
+                      widget.initialTransaction == null ? '저장하기' : '수정 완료',
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
                       ),
@@ -3462,17 +4008,31 @@ String formatFullDate(DateTime date) {
       '(${weekdays[date.weekday - 1]})';
 }
 
-IconData categoryIcon(String category) {
-  return switch (category) {
-    '식비' => Icons.restaurant_rounded,
-    '카페' => Icons.local_cafe_rounded,
-    '교통' => Icons.directions_bus_rounded,
-    '쇼핑' => Icons.shopping_bag_rounded,
-    '생활' => Icons.home_rounded,
-    '의료' => Icons.local_hospital_rounded,
-    '급여' => Icons.account_balance_rounded,
-    '용돈' => Icons.savings_rounded,
-    '부수입' => Icons.trending_up_rounded,
-    _ => Icons.more_horiz_rounded,
-  };
+IconData categoryIcon(String category, [Map<String, String>? iconKeys]) {
+  final key =
+      iconKeys?[category] ??
+      _runtimeCategoryIconKeys[category] ??
+      defaultCategoryIconKeys[category] ??
+      'more';
+  return categoryIconChoices[key] ?? Icons.more_horiz_rounded;
+}
+
+class WonAmountInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) {
+      return const TextEditingValue();
+    }
+    final limitedDigits = digits.length > 15 ? digits.substring(0, 15) : digits;
+    final normalized = limitedDigits.replaceFirst(RegExp(r'^0+(?=\d)'), '');
+    final formatted = formatWon(int.parse(normalized));
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
 }
