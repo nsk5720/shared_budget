@@ -40,6 +40,7 @@ class SmsReceiver : BroadcastReceiver() {
     companion object {
         const val preferencesName = "shared_budget_sms"
         const val pendingSmsQueueKey = "pending_sms_queue"
+        const val disclosureConsentKey = "sms_disclosure_consent"
         const val notificationChannelId = "payment_sms"
         const val notificationId = 2107
         const val openSmsExtra = "open_pending_sms"

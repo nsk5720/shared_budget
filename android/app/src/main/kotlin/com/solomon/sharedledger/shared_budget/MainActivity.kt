@@ -62,6 +62,29 @@ class MainActivity : FlutterActivity() {
                     )
                 }
 
+                "hasSmsDisclosureConsent" -> {
+                    val preferences = getSharedPreferences(
+                        SmsReceiver.preferencesName,
+                        MODE_PRIVATE,
+                    )
+                    result.success(
+                        preferences.getBoolean(
+                            SmsReceiver.disclosureConsentKey,
+                            false,
+                        ),
+                    )
+                }
+
+                "saveSmsDisclosureConsent" -> {
+                    getSharedPreferences(
+                        SmsReceiver.preferencesName,
+                        MODE_PRIVATE,
+                    ).edit()
+                        .putBoolean(SmsReceiver.disclosureConsentKey, true)
+                        .apply()
+                    result.success(null)
+                }
+
                 "getPendingSms" -> {
                     val preferences = getSharedPreferences(
                         SmsReceiver.preferencesName,

@@ -450,6 +450,15 @@ class SmsPlatformService {
     await _channel.invokeMethod<bool>('requestSmsPermission');
   }
 
+  static Future<bool> hasDisclosureConsent() async {
+    return await _channel.invokeMethod<bool>('hasSmsDisclosureConsent') ??
+        false;
+  }
+
+  static Future<void> saveDisclosureConsent() async {
+    await _channel.invokeMethod<void>('saveSmsDisclosureConsent');
+  }
+
   static Future<String?> getPendingSms() {
     return _channel.invokeMethod<String>('getPendingSms');
   }
@@ -496,12 +505,57 @@ class _BudgetShellState extends State<BudgetShell> {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
-        await SmsPlatformService.requestPermission();
+        await _prepareSmsAccess();
         await _checkPendingSms();
       } on MissingPluginException {
         // iOS와 위젯 테스트에서는 Android 문자 채널을 사용하지 않습니다.
       }
     });
+  }
+
+  Future<void> _prepareSmsAccess() async {
+    final alreadyConsented = await SmsPlatformService.hasDisclosureConsent();
+    if (!alreadyConsented) {
+      if (!mounted) {
+        return;
+      }
+      final accepted = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('결제 문자 자동등록 안내'),
+          content: const SingleChildScrollView(
+            child: Text(
+              '우리 가계부는 새로 수신되는 문자 중 금액(원)이 포함된 '
+              '결제 문자를 감지합니다.\n\n'
+              '문자에서 사용처, 금액, 날짜를 자동으로 입력하고 문자 원문을 '
+              '메모에 표시합니다. 사용자가 저장하기를 누른 경우에만 해당 '
+              '내용이 Firebase에 저장되며, 함께쓰기 중이라면 연결된 상대방도 '
+              '볼 수 있습니다.\n\n'
+              '기존 문자함은 읽지 않습니다. 동의하지 않아도 직접 내역을 '
+              '입력해 가계부를 사용할 수 있습니다.',
+              style: TextStyle(height: 1.5),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('사용 안 함'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('동의하고 권한 허용'),
+            ),
+          ],
+        ),
+      );
+      if (accepted != true) {
+        return;
+      }
+      await SmsPlatformService.saveDisclosureConsent();
+    }
+
+    await SmsPlatformService.requestPermission();
   }
 
   Future<void> _connectFirestore() async {
