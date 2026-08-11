@@ -358,6 +358,7 @@ class SmsTransactionDraft {
     required this.category,
     required this.date,
     required this.rawMessage,
+    this.type = TransactionType.expense,
   });
 
   final String title;
@@ -365,6 +366,7 @@ class SmsTransactionDraft {
   final String category;
   final DateTime date;
   final String rawMessage;
+  final TransactionType type;
 }
 
 class SmsTransactionParser {
@@ -374,12 +376,15 @@ class SmsTransactionParser {
         ? rawValue.substring(newlineIndex + 1).trim()
         : rawValue.trim();
 
-    final amountMatch = RegExp(r'([\d,]+)\s*원').firstMatch(message);
+    final amountMatch = RegExp(
+      r'(?:₩\s*([\d,]+)|([\d,]+)\s*원)',
+    ).firstMatch(message);
     if (amountMatch == null) {
       return null;
     }
 
-    final amount = int.tryParse(amountMatch.group(1)!.replaceAll(',', ''));
+    final amountText = amountMatch.group(1) ?? amountMatch.group(2);
+    final amount = int.tryParse(amountText!.replaceAll(',', ''));
     if (amount == null || amount <= 0) {
       return null;
     }
@@ -404,14 +409,37 @@ class SmsTransactionParser {
     ).firstMatch(message);
     if (merchantMatch != null) {
       title = merchantMatch.group(1)!.trim();
+    } else {
+      final paymentLine = message
+          .split('\n')
+          .firstWhere(
+            (line) =>
+                RegExp(r'(?:₩\s*[\d,]+|[\d,]+\s*원)').hasMatch(line) &&
+                RegExp(r'승인|결제|사용|출금|입금|취소|환불').hasMatch(line),
+            orElse: () => '',
+          );
+      final cleanedTitle = paymentLine
+          .replaceAll(RegExp(r'\[[^\]]+\]'), ' ')
+          .replaceAll(RegExp(r'(?:₩\s*[\d,]+|[\d,]+\s*원)'), ' ')
+          .replaceAll(RegExp(r'\d{1,2}[/-]\d{1,2}(?:\s+\d{1,2}:\d{2})?'), ' ')
+          .replaceAll(RegExp(r'승인|결제|사용|출금|입금|취소|환불|일시불|할부'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (cleanedTitle.isNotEmpty) {
+        title = cleanedTitle;
+      }
     }
 
+    final type = RegExp(r'입금|급여|송금받').hasMatch(message)
+        ? TransactionType.income
+        : TransactionType.expense;
     return SmsTransactionDraft(
       title: title,
       amount: amount,
-      category: _categoryFor(title),
+      category: type == TransactionType.income ? '기타' : _categoryFor(title),
       date: date,
       rawMessage: message,
+      type: type,
     );
   }
 
@@ -457,6 +485,14 @@ class SmsPlatformService {
 
   static Future<void> saveDisclosureConsent() async {
     await _channel.invokeMethod<void>('saveSmsDisclosureConsent');
+  }
+
+  static Future<bool> hasNotificationAccess() async {
+    return await _channel.invokeMethod<bool>('hasNotificationAccess') ?? false;
+  }
+
+  static Future<void> openNotificationAccessSettings() async {
+    await _channel.invokeMethod<void>('openNotificationAccessSettings');
   }
 
   static Future<String?> getPendingSms() {
@@ -523,17 +559,20 @@ class _BudgetShellState extends State<BudgetShell> {
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('결제 문자 자동등록 안내'),
+          title: const Text('결제 Push 알림 자동등록 안내'),
           content: const SingleChildScrollView(
             child: Text(
-              '우리 가계부는 새로 수신되는 문자 중 금액(원)이 포함된 '
-              '결제 문자를 감지합니다.\n\n'
-              '문자에서 사용처, 금액, 날짜를 자동으로 입력하고 문자 원문을 '
-              '메모에 표시합니다. 사용자가 저장하기를 누른 경우에만 해당 '
+              '우리 가계부는 은행·카드 앱이 표시하는 결제 Push 알림을 '
+              '감지합니다. 문자 권한은 사용하지 않습니다.\n\n'
+              '알림 접근을 허용하면 Android 기능상 다른 앱의 알림을 볼 수 '
+              '있지만, 이 앱은 금액과 결제 관련 단어가 함께 있는 알림만 '
+              '대기 목록에 넣고 나머지는 저장하지 않습니다.\n\n'
+              '사용처, 금액, 날짜를 자동으로 입력하고 원문을 메모에 '
+              '표시합니다. 사용자가 저장하기를 누른 경우에만 해당 '
               '내용이 Firebase에 저장되며, 함께쓰기 중이라면 연결된 상대방도 '
               '볼 수 있습니다.\n\n'
-              '기존 문자함은 읽지 않습니다. 동의하지 않아도 직접 내역을 '
-              '입력해 가계부를 사용할 수 있습니다.',
+              '동의하지 않아도 직접 내역을 입력해 가계부를 사용할 수 '
+              '있습니다.',
               style: TextStyle(height: 1.5),
             ),
           ),
@@ -544,7 +583,7 @@ class _BudgetShellState extends State<BudgetShell> {
             ),
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('동의하고 권한 허용'),
+              child: const Text('동의하고 계속'),
             ),
           ],
         ),
@@ -556,6 +595,35 @@ class _BudgetShellState extends State<BudgetShell> {
     }
 
     await SmsPlatformService.requestPermission();
+
+    final hasNotificationAccess =
+        await SmsPlatformService.hasNotificationAccess();
+    if (!hasNotificationAccess && mounted) {
+      final openSettings = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('결제 Push 알림 연결'),
+          content: const Text(
+            '다음 화면에서 ‘우리 가계부 결제 알림 읽기’를 찾아 켜 주세요. '
+            '그래야 은행·카드 앱의 결제 알림을 자동으로 가져올 수 있습니다.',
+            style: TextStyle(height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('나중에'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('설정 열기'),
+            ),
+          ],
+        ),
+      );
+      if (openSettings == true) {
+        await SmsPlatformService.openNotificationAccessSettings();
+      }
+    }
   }
 
   Future<void> _connectFirestore() async {
@@ -2661,7 +2729,7 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
   late final TextEditingController _amountController;
   late final TextEditingController _memoController;
 
-  TransactionType _type = TransactionType.expense;
+  late TransactionType _type;
   late String _category;
   late DateTime _date;
 
@@ -2675,17 +2743,21 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
   void initState() {
     super.initState();
     final draft = widget.initialDraft;
+    _type = draft?.type ?? TransactionType.expense;
     _titleController = TextEditingController(text: draft?.title ?? '');
     _amountController = TextEditingController(
       text: draft == null ? '' : draft.amount.toString(),
     );
     _memoController = TextEditingController(text: draft?.rawMessage ?? '');
     final suggestedCategory = draft?.category;
+    final availableCategories = _type == TransactionType.expense
+        ? widget.expenseCategories
+        : widget.incomeCategories;
     _category =
         suggestedCategory != null &&
-            widget.expenseCategories.contains(suggestedCategory)
+            availableCategories.contains(suggestedCategory)
         ? suggestedCategory
-        : widget.expenseCategories.first;
+        : availableCategories.first;
     _date = draft?.date ?? DateTime.now();
   }
 

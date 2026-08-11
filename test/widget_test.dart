@@ -36,6 +36,30 @@ void main() {
     expect(draft.rawMessage, '[우리카드] 07/30 14:20 스타벅스 5,800원 승인');
   });
 
+  test('카드 Push 알림에서 원화 기호 금액과 사용처를 읽는다', () {
+    final draft = SmsTransactionParser.parse(
+      '우리카드\n[우리카드] 스타벅스 ₩5,800 승인\n08/11 14:20',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.title, '스타벅스');
+    expect(draft.amount, 5800);
+    expect(draft.category, '카페');
+    expect(draft.date.month, 8);
+    expect(draft.date.day, 11);
+    expect(draft.rawMessage, '[우리카드] 스타벅스 ₩5,800 승인\n08/11 14:20');
+  });
+
+  test('입금 Push 알림은 수입으로 구분한다', () {
+    final draft = SmsTransactionParser.parse(
+      '토스\n김민수님에게 30,000원 입금 08/11 15:00',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.amount, 30000);
+    expect(draft.type, TransactionType.income);
+  });
+
   testWidgets('문자 원문을 내역 메모에 자동 입력한다', (tester) async {
     const rawMessage = '[우리카드] 07/30 14:20 스타벅스 5,800원 승인';
     final draft = SmsTransactionDraft(

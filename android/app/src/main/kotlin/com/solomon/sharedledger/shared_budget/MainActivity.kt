@@ -1,11 +1,12 @@
 package com.solomon.sharedledger.shared_budget
 
-import android.Manifest
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -27,20 +28,13 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "requestSmsPermission" -> {
                     val permissions = mutableListOf<String>()
-                    if (ContextCompat.checkSelfPermission(
-                            this,
-                            Manifest.permission.RECEIVE_SMS,
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        permissions.add(Manifest.permission.RECEIVE_SMS)
-                    }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                         ContextCompat.checkSelfPermission(
                             this,
-                            Manifest.permission.POST_NOTIFICATIONS,
+                            android.Manifest.permission.POST_NOTIFICATIONS,
                         ) != PackageManager.PERMISSION_GRANTED
                     ) {
-                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                        permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
                     }
 
                     if (permissions.isNotEmpty()) {
@@ -53,23 +47,14 @@ class MainActivity : FlutterActivity() {
                     result.success(permissions.isEmpty())
                 }
 
-                "hasSmsPermission" -> {
-                    result.success(
-                        ContextCompat.checkSelfPermission(
-                            this,
-                            Manifest.permission.RECEIVE_SMS,
-                        ) == PackageManager.PERMISSION_GRANTED,
-                    )
-                }
-
                 "hasSmsDisclosureConsent" -> {
                     val preferences = getSharedPreferences(
-                        SmsReceiver.preferencesName,
+                        PaymentQueue.preferencesName,
                         MODE_PRIVATE,
                     )
                     result.success(
                         preferences.getBoolean(
-                            SmsReceiver.disclosureConsentKey,
+                            PaymentQueue.disclosureConsentKey,
                             false,
                         ),
                     )
@@ -77,47 +62,59 @@ class MainActivity : FlutterActivity() {
 
                 "saveSmsDisclosureConsent" -> {
                     getSharedPreferences(
-                        SmsReceiver.preferencesName,
+                        PaymentQueue.preferencesName,
                         MODE_PRIVATE,
                     ).edit()
-                        .putBoolean(SmsReceiver.disclosureConsentKey, true)
+                        .putBoolean(PaymentQueue.disclosureConsentKey, true)
                         .apply()
+                    result.success(null)
+                }
+
+                "hasNotificationAccess" -> {
+                    result.success(
+                        NotificationManagerCompat.getEnabledListenerPackages(this)
+                            .contains(packageName),
+                    )
+                }
+
+                "openNotificationAccessSettings" -> {
+                    startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                     result.success(null)
                 }
 
                 "getPendingSms" -> {
                     val preferences = getSharedPreferences(
-                        SmsReceiver.preferencesName,
+                        PaymentQueue.preferencesName,
                         MODE_PRIVATE,
                     )
                     val queue = JSONArray(
-                        preferences.getString(SmsReceiver.pendingSmsQueueKey, "[]"),
+                        preferences.getString(PaymentQueue.pendingQueueKey, "[]"),
                     )
                     result.success(if (queue.length() > 0) queue.getString(0) else null)
                 }
 
                 "clearPendingSms" -> {
                     val preferences = getSharedPreferences(
-                        SmsReceiver.preferencesName,
+                        PaymentQueue.preferencesName,
                         MODE_PRIVATE,
                     )
                     val queue = JSONArray(
-                        preferences.getString(SmsReceiver.pendingSmsQueueKey, "[]"),
+                        preferences.getString(PaymentQueue.pendingQueueKey, "[]"),
                     )
                     if (queue.length() > 0) {
                         queue.remove(0)
                     }
                     preferences.edit()
-                        .putString(SmsReceiver.pendingSmsQueueKey, queue.toString())
+                        .putString(PaymentQueue.pendingQueueKey, queue.toString())
                         .apply()
 
                     if (queue.length() == 0) {
                         getSystemService(NotificationManager::class.java)
-                            .cancel(SmsReceiver.notificationId)
+                            .cancel(PaymentQueue.notificationId)
                     } else {
                         val nextValue = queue.getString(0)
                         val nextBody = nextValue.substringAfter("\n", nextValue)
-                        SmsReceiver.showPendingNotification(
+                        PaymentQueue.showPendingNotification(
                             this,
                             nextBody,
                             queue.length(),
@@ -130,7 +127,7 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        if (intent?.getBooleanExtra(SmsReceiver.openSmsExtra, false) == true) {
+        if (intent?.getBooleanExtra(PaymentQueue.openPaymentExtra, false) == true) {
             methodChannel?.invokeMethod("smsNotificationTapped", null)
         }
     }
@@ -138,7 +135,7 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra(SmsReceiver.openSmsExtra, false)) {
+        if (intent.getBooleanExtra(PaymentQueue.openPaymentExtra, false)) {
             methodChannel?.invokeMethod("smsNotificationTapped", null)
         }
     }
