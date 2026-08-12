@@ -899,7 +899,7 @@ class SmsTransactionParser {
         .replaceAll(RegExp(r'\S*\*+\S*\s*님'), ' ')
         .replaceAll(
           RegExp(
-            r'승인|결제|사용|출금|입금|송금|이체|취소|환불|환급|일시불|\d+개월\s*할부|체크카드|신용카드|누적|잔액|한도',
+            r'정상\s*처리\s*완료|처리\s*완료|승인\s*완료|결제\s*완료|사용\s*완료|출금\s*완료|입금\s*완료|송금\s*완료|이체\s*완료|취소\s*완료|환불\s*완료|환급\s*완료|승인|결제|사용|출금|입금|송금|이체|취소|환불|환급|일시불|\d+개월\s*할부|체크카드|신용카드|누적|잔액|한도|처리|완료',
           ),
           ' ',
         )
@@ -912,7 +912,9 @@ class SmsTransactionParser {
     if (value.length < 2 || value.length > 35) {
       return false;
     }
-    return !RegExp(r'^알림$|^카드$|^은행$|^결제$|^입금$').hasMatch(value);
+    return !RegExp(
+      r'^알림$|^카드$|^은행$|^결제$|^입금$|^출금$|^송금$|^이체$|^처리$|^완료$|^정상$|^정상\s*처리$|^정상\s*처리\s*완료$',
+    ).hasMatch(value);
   }
 
   static String _categoryFor(

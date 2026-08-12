@@ -135,6 +135,25 @@ void main() {
     expect(draft.title, '교보문고');
   });
 
+  test('출금 완료에서 완료를 사용처로 넣지 않는다', () {
+    final draft = SmsTransactionParser.parse(
+      '토스\n15,000원 출금 완료\n스타벅스\n08/12 16:30',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.title, '스타벅스');
+    expect(draft.title, isNot('완료'));
+  });
+
+  test('결제 완료와 사용처가 같은 줄이어도 사용처만 남긴다', () {
+    final draft = SmsTransactionParser.parse(
+      '카카오페이\n22,000원 결제완료 배달의민족 08/12 19:20',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.title, '배달의민족');
+  });
+
   testWidgets('문자 원문을 내역 메모에 자동 입력한다', (tester) async {
     const rawMessage = '[우리카드] 07/30 14:20 스타벅스 5,800원 승인';
     final draft = SmsTransactionDraft(
