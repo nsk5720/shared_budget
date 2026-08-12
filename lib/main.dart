@@ -104,7 +104,8 @@ class SharedBudgetApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Color(0xFF4F46E5);
+    const seed = Color(0xFFE86A9D);
+    const background = Color(0xFFFFF8FB);
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -114,33 +115,70 @@ class SharedBudgetApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: seed,
           brightness: Brightness.light,
+          surface: const Color(0xFFFFFBFD),
         ),
-        scaffoldBackgroundColor: const Color(0xFFF7F7FB),
+        scaffoldBackgroundColor: background,
         appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFFF7F7FB),
+          backgroundColor: background,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
         ),
-        cardTheme: const CardThemeData(
+        cardTheme: CardThemeData(
           elevation: 0,
-          color: Colors.white,
+          color: const Color(0xFFFFFEFF),
           margin: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: const BorderSide(color: Color(0xFFFFE5EF)),
+          ),
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: const Color(0xFFF3F4F6),
+          fillColor: const Color(0xFFFFEFF5),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(18),
             borderSide: BorderSide.none,
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(18),
             borderSide: BorderSide.none,
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(18),
             borderSide: const BorderSide(color: seed, width: 1.5),
           ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          ),
+        ),
+        floatingActionButtonTheme: const FloatingActionButtonThemeData(
+          backgroundColor: Color(0xFFE86A9D),
+          foregroundColor: Colors.white,
+          shape: StadiumBorder(),
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: const Color(0xFFFFFBFD),
+          indicatorColor: const Color(0xFFFFD9E8),
+          elevation: 0,
+          labelTextStyle: WidgetStateProperty.resolveWith((states) {
+            return TextStyle(
+              color: states.contains(WidgetState.selected)
+                  ? const Color(0xFFB83F73)
+                  : const Color(0xFF7E6E76),
+              fontWeight: states.contains(WidgetState.selected)
+                  ? FontWeight.w800
+                  : FontWeight.w600,
+            );
+          }),
+        ),
+        bottomSheetTheme: const BottomSheetThemeData(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
         ),
       ),
       home: const AuthGate(),
@@ -560,6 +598,8 @@ String _authErrorMessage(String code) {
 }
 
 enum TransactionType { expense, income }
+
+enum AddTransactionOutcome { saved, dismissed, discarded }
 
 const defaultExpenseCategories = ['식비', '카페', '교통', '쇼핑', '생활', '의료', '기타'];
 
@@ -1460,10 +1500,14 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         return;
       }
 
-      final saved = await _openAddTransaction(draft: draft);
-      if (saved) {
+      final outcome = await _openAddTransaction(draft: draft);
+      if (outcome == AddTransactionOutcome.saved ||
+          outcome == AddTransactionOutcome.discarded) {
         await SmsPlatformService.clearPendingSms();
         await _refreshPendingPaymentCount();
+        if (outcome == AddTransactionOutcome.discarded && mounted) {
+          _showMessage('잘못 인식된 알림을 대기 목록에서 제외했습니다.');
+        }
         _lastPresentedSms = null;
         _checkingSms = false;
         await _checkPendingSms();
@@ -1487,16 +1531,25 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         .timeout(const Duration(seconds: 15));
   }
 
-  Future<bool> _openAddTransaction({SmsTransactionDraft? draft}) async {
+  Future<AddTransactionOutcome> _openAddTransaction({
+    SmsTransactionDraft? draft,
+  }) async {
+    var discardRequested = false;
     final result = await showModalBottomSheet<BudgetTransaction>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => AddTransactionSheet(
+      builder: (sheetContext) => AddTransactionSheet(
         initialDraft: draft,
         expenseCategories: _expenseCategories,
         incomeCategories: _incomeCategories,
+        onDiscard: draft == null
+            ? null
+            : () {
+                discardRequested = true;
+                Navigator.of(sheetContext).pop();
+              },
       ),
     );
 
@@ -1506,7 +1559,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         if (mounted) {
           _showMessage('거래가 저장되었습니다.');
         }
-        return true;
+        return AddTransactionOutcome.saved;
       } on FirebaseException catch (error) {
         debugPrint(
           'Firestore transaction save failed: ${error.code} ${error.message}',
@@ -1514,10 +1567,12 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         if (mounted) {
           _showMessage(_firestoreErrorMessage(error));
         }
-        return false;
+        return AddTransactionOutcome.dismissed;
       }
     }
-    return false;
+    return discardRequested
+        ? AddTransactionOutcome.discarded
+        : AddTransactionOutcome.dismissed;
   }
 
   Future<void> _openTransactionActions(BudgetTransaction transaction) async {
@@ -1901,7 +1956,7 @@ class HomePage extends StatelessWidget {
                         label: '오늘 지출',
                         value: '${formatWon(todayExpense)}원',
                         icon: Icons.today_rounded,
-                        color: const Color(0xFFEA580C),
+                        color: const Color(0xFFE86A9D),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1910,7 +1965,7 @@ class HomePage extends StatelessWidget {
                         label: '하루 평균',
                         value: '${formatWon(averageDailyExpense)}원',
                         icon: Icons.insights_rounded,
-                        color: const Color(0xFF2563EB),
+                        color: const Color(0xFF8B75D7),
                       ),
                     ),
                   ],
@@ -1979,10 +2034,10 @@ class _HomeHeader extends StatelessWidget {
           height: 48,
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(18),
           ),
           child: Icon(
-            Icons.account_balance_wallet_rounded,
+            Icons.savings_rounded,
             color: Theme.of(context).colorScheme.primary,
           ),
         ),
@@ -1997,7 +2052,7 @@ class _HomeHeader extends StatelessWidget {
               ),
               SizedBox(height: 2),
               Text(
-                '함께 모으고, 함께 확인해요',
+                '알콩달콩 모으고, 함께 확인해요 ♥',
                 style: TextStyle(color: Color(0xFF6B7280)),
               ),
             ],
@@ -2022,7 +2077,7 @@ class _HomeHeader extends StatelessWidget {
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFEF4444),
+                    color: const Color(0xFFE84D83),
                     borderRadius: BorderRadius.circular(99),
                     border: Border.all(color: Colors.white, width: 2),
                   ),
@@ -2062,9 +2117,16 @@ class _HomeInsightCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFF0F1F5)),
+        color: const Color(0xFFFFFEFF),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFFFDDEA)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0FE86A9D),
+            blurRadius: 16,
+            offset: Offset(0, 7),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -2126,13 +2188,13 @@ class _SummaryCard extends StatelessWidget {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+          colors: [Color(0xFFF17AA8), Color(0xFFA786E8)],
         ),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(28),
         boxShadow: const [
           BoxShadow(
-            color: Color(0x294F46E5),
-            blurRadius: 24,
+            color: Color(0x33E86A9D),
+            blurRadius: 28,
             offset: Offset(0, 12),
           ),
         ],
@@ -2142,7 +2204,7 @@ class _SummaryCard extends StatelessWidget {
         children: [
           Text(
             '$month월 남은 금액',
-            style: const TextStyle(color: Color(0xFFDAD7FE), fontSize: 14),
+            style: const TextStyle(color: Color(0xFFFFEAF3), fontSize: 14),
           ),
           const SizedBox(height: 6),
           Text(
@@ -2209,7 +2271,7 @@ class _SummaryItem extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label, style: const TextStyle(color: Color(0xFFDAD7FE))),
+              Text(label, style: const TextStyle(color: Color(0xFFFFEAF3))),
               const SizedBox(height: 2),
               Text(
                 '${formatWon(amount)}원',
@@ -2387,7 +2449,7 @@ class _MonthSelector extends StatelessWidget {
     return Container(
       height: 52,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFFFFEFF),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
@@ -2559,7 +2621,7 @@ class _StatSummaryCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFFFFEFF),
         borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
@@ -2658,7 +2720,7 @@ class _CategoryStatistics extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFFFFEFF),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
@@ -2831,12 +2893,12 @@ class _EmptyTransactions extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 44),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFFFFEFF),
         borderRadius: BorderRadius.circular(20),
       ),
       child: const Column(
         children: [
-          Icon(Icons.receipt_long_outlined, size: 46, color: Color(0xFFD1D5DB)),
+          Icon(Icons.auto_awesome_rounded, size: 46, color: Color(0xFFF0A1BE)),
           SizedBox(height: 12),
           Text('아직 거래가 없어요', style: TextStyle(fontWeight: FontWeight.w700)),
           SizedBox(height: 4),
@@ -3906,12 +3968,14 @@ class AddTransactionSheet extends StatefulWidget {
     super.key,
     this.initialDraft,
     this.initialTransaction,
+    this.onDiscard,
     required this.expenseCategories,
     required this.incomeCategories,
   });
 
   final SmsTransactionDraft? initialDraft;
   final BudgetTransaction? initialTransaction;
+  final VoidCallback? onDiscard;
   final List<String> expenseCategories;
   final List<String> incomeCategories;
 
@@ -4003,6 +4067,36 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
     }
   }
 
+  Future<void> _confirmDiscard() async {
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(Icons.delete_sweep_rounded),
+        title: const Text('이 알림을 제외할까요?'),
+        content: const Text(
+          '잘못 인식된 문자·Push 알림을 대기 목록에서 삭제합니다.\n'
+          '가계부 내역으로는 저장되지 않아요.',
+          textAlign: TextAlign.center,
+          style: TextStyle(height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('계속 확인'),
+          ),
+          FilledButton.tonalIcon(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('제외하기'),
+          ),
+        ],
+      ),
+    );
+    if (discard == true && mounted) {
+      widget.onDiscard?.call();
+    }
+  }
+
   void _save() {
     if (!_formKey.currentState!.validate()) {
       return;
@@ -4028,7 +4122,7 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        color: Colors.white,
+        color: Color(0xFFFFFBFD),
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       child: Padding(
@@ -4056,9 +4150,58 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  widget.initialTransaction == null ? '내역 추가' : '내역 수정',
-                  style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900),
+                  widget.initialDraft != null
+                      ? '자동 인식 내역 확인'
+                      : widget.initialTransaction == null
+                      ? '내역 추가'
+                      : '내역 수정',
+                  style: const TextStyle(
+                    fontSize: 23,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
+                if (widget.initialDraft != null) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFEAF2),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: const Color(0xFFFFC8DC)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.auto_awesome_rounded,
+                          size: 20,
+                          color: Color(0xFFCE4F83),
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            '문자·Push에서 자동으로 찾은 내역이에요. '
+                            '정보가 맞는지 확인해 주세요.',
+                            style: TextStyle(
+                              color: Color(0xFF8F3D63),
+                              height: 1.4,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: _confirmDiscard,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: const Text('이 알림 제외'),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 18),
                 SegmentedButton<TransactionType>(
                   segments: const [

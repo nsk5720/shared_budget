@@ -111,6 +111,8 @@ void main() {
     );
 
     expect(find.text(rawMessage), findsOneWidget);
+    expect(find.text('자동 인식 내역 확인'), findsOneWidget);
+    expect(find.text('이 알림 제외'), findsOneWidget);
   });
 
   testWidgets('기존 내역 수정 화면에 금액을 쉼표로 표시한다', (tester) async {
