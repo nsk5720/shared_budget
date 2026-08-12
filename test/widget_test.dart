@@ -36,18 +36,6 @@ void main() {
     expect(formatWon(-12500), '-12,500');
   });
 
-  test('AI 전송 전에 카드번호와 전화번호를 가린다', () {
-    final masked = maskSensitiveNotification(
-      '카드 1234-5678-9012-3456 35,000원 결제 문의 010-1234-5678',
-    );
-
-    expect(masked, contains('[카드번호 숨김]'));
-    expect(masked, contains('[전화번호 숨김]'));
-    expect(masked, contains('35,000원'));
-    expect(masked, isNot(contains('1234-5678-9012-3456')));
-    expect(masked, isNot(contains('010-1234-5678')));
-  });
-
   test('금액 입력 중 천 단위 쉼표를 자동 적용한다', () {
     final result = WonAmountInputFormatter().formatEditUpdate(
       TextEditingValue.empty,
@@ -56,6 +44,23 @@ void main() {
 
     expect(result.text, '1,234,567');
     expect(result.selection.baseOffset, 9);
+  });
+
+  test('무료 학습 규칙은 공백과 대소문자 차이를 무시한다', () {
+    expect(
+      merchantRuleKey('스타 벅스', TransactionType.expense),
+      merchantRuleKey('스타벅스', TransactionType.expense),
+    );
+    expect(
+      merchantRuleKey('GS25', TransactionType.expense),
+      merchantRuleKey('gs25', TransactionType.expense),
+    );
+  });
+
+  test('상태 문구는 사용처 학습 대상에서 제외한다', () {
+    expect(isLearnableMerchantTitle('스타벅스'), isTrue);
+    expect(isLearnableMerchantTitle('카드 결제'), isFalse);
+    expect(isLearnableMerchantTitle('완료'), isFalse);
   });
 
   test('사용자가 선택한 분류 아이콘을 표시한다', () {

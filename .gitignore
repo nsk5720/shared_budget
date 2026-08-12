@@ -33,10 +33,6 @@ migrate_working_dir/
 /build/
 /coverage/
 .codex-temp/
-/functions/node_modules/
-/functions/.env*
-/functions/.secret.local
-/functions/firebase-debug.log
 
 # Symbolication related
 app.*.symbols

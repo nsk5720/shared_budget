@@ -46,32 +46,10 @@ Android Emulator의 `Extended controls > Phone`에서 아래 형식의 SMS를
 
 문자가 도착하면 앱에 거래 확인 화면이 자동으로 표시됩니다.
 
-## AI 자동분석 설정
+## 무료 학습형 자동분류
 
-문자·Push는 기본 규칙으로 먼저 분석하고, `함께쓰기 > AI 자동분석`을
-켠 경우에만 Firebase Cloud Function이 OpenAI API로 사용처와 분류를
-한 번 더 확인합니다. 카드번호·전화번호 등은 전송 전에 가리고,
-원문 전체는 AI 결과로 덮어쓰지 않으며 내역의 메모에 보존합니다.
-
-### 최초 1회 배포
-
-Firebase Cloud Functions와 OpenAI API는 과금 계정이 필요합니다.
-
-```cmd
-cd /d C:\Users\Solomonm\Documents\Codex\2026-07-30\id-db\shared_budget\functions
-"C:\Program Files\nodejs\npm.cmd" install
-
-cd /d C:\Users\Solomonm\Documents\Codex\2026-07-30\id-db\shared_budget
-firebase functions:secrets:set OPENAI_API_KEY --project shared-budget-46538
-firebase deploy --project shared-budget-46538 --only functions:analyzeTransaction
-```
-
-`functions:secrets:set` 명령이 값을 물으면 OpenAI Platform에서 만든 API 키를
-입력합니다. API 키는 Flutter 코드, `.env`, Git에 저장하지 않습니다.
-
-### 검사
-
-```cmd
-dart analyze lib test
-"C:\Program Files\nodejs\node.exe" --check functions\index.js
-```
+문자·Push는 휴대폰에서 규칙으로 분석하며 외부 AI로 전송하지
+않습니다. 자동 인식 내역의 사용처와 분류를 고쳐 저장하면 현재
+가계부에 `사용처 -> 분류` 규칙을 기억합니다. 다음에 같은 사용처가
+나오면 기억한 분류를 자동으로 적용합니다. Firebase Spark 요금제로
+사용할 수 있으며 Cloud Functions·OpenAI API·API 키가 필요하지 않습니다.

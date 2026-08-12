@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -603,6 +601,20 @@ enum TransactionType { expense, income }
 
 enum AddTransactionOutcome { saved, dismissed, discarded }
 
+String merchantRuleKey(String title, TransactionType type) {
+  final normalized = title
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^0-9a-z가-힣]'), '')
+      .trim();
+  return '${type.name}:$normalized';
+}
+
+bool isLearnableMerchantTitle(String title) {
+  final value = title.replaceAll(RegExp(r'\s+'), '').toLowerCase();
+  return value.length >= 2 &&
+      !const {'카드결제', '결제', '입금', '출금', '송금', '이체', '완료', '알림'}.contains(value);
+}
+
 const defaultExpenseCategories = ['식비', '카페', '교통', '쇼핑', '생활', '의료', '기타'];
 
 const defaultIncomeCategories = ['급여', '용돈', '부수입', '기타'];
@@ -710,8 +722,6 @@ class SmsTransactionDraft {
     required this.date,
     required this.rawMessage,
     this.type = TransactionType.expense,
-    this.aiAnalyzed = false,
-    this.aiConfidence,
   });
 
   final String title;
@@ -720,113 +730,6 @@ class SmsTransactionDraft {
   final DateTime date;
   final String rawMessage;
   final TransactionType type;
-  final bool aiAnalyzed;
-  final double? aiConfidence;
-}
-
-String maskSensitiveNotification(String value) {
-  return value
-      .replaceAllMapped(
-        RegExp(r'(?<!\d)(?:(?:\d{4}[- ]?){3}\d{4}|\d{12,19})(?!\d)'),
-        (_) => '[카드번호 숨김]',
-      )
-      .replaceAllMapped(
-        RegExp(r'(?<!\d)0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}(?!\d)'),
-        (_) => '[전화번호 숨김]',
-      )
-      .replaceAllMapped(
-        RegExp(r'(?<![\d,])\d{6,}(?![\d,원])'),
-        (_) => '[번호 숨김]',
-      );
-}
-
-class AiTransactionService {
-  static const _region = 'asia-northeast3';
-  static const _projectId = 'shared-budget-46538';
-
-  static Future<SmsTransactionDraft> analyze({
-    required User user,
-    required SmsTransactionDraft fallback,
-    required List<String> expenseCategories,
-    required List<String> incomeCategories,
-  }) async {
-    final token = await user.getIdToken(true);
-    if (token == null || token.isEmpty) {
-      throw const HttpException('로그인 인증 정보가 없습니다.');
-    }
-    final client = HttpClient();
-    try {
-      final uri = Uri.parse(
-        'https://$_region-$_projectId.cloudfunctions.net/analyzeTransaction',
-      );
-      final request = await client.postUrl(uri);
-      request.headers.contentType = ContentType.json;
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      request.write(
-        jsonEncode({
-          'data': {
-            'message': maskSensitiveNotification(fallback.rawMessage),
-            'ruleResult': {
-              'title': fallback.title,
-              'amount': fallback.amount,
-              'category': fallback.category,
-              'type': fallback.type.name,
-              'date': fallback.date.toIso8601String(),
-            },
-            'expenseCategories': expenseCategories,
-            'incomeCategories': incomeCategories,
-          },
-        }),
-      );
-      final response = await request.close().timeout(
-        const Duration(seconds: 18),
-      );
-      final body = await utf8.decoder.bind(response).join();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException('AI 서버 응답 오류: ${response.statusCode}');
-      }
-      final envelope = jsonDecode(body) as Map<String, dynamic>;
-      final result = envelope['result'] as Map<String, dynamic>?;
-      if (result == null) {
-        throw const FormatException('AI 분석 결과가 없습니다.');
-      }
-      final type = result['type'] == 'income'
-          ? TransactionType.income
-          : TransactionType.expense;
-      final availableCategories = type == TransactionType.income
-          ? incomeCategories
-          : expenseCategories;
-      final suggestedCategory = result['category'] as String?;
-      final parsedDate = DateTime.tryParse(result['date'] as String? ?? '');
-      final parsedAmount = (result['amount'] as num?)?.round();
-      final confidence = (result['confidence'] as num?)?.toDouble().clamp(
-        0.0,
-        1.0,
-      );
-      return SmsTransactionDraft(
-        title: (result['title'] as String?)?.trim().isNotEmpty == true
-            ? (result['title'] as String).trim()
-            : fallback.title,
-        amount: parsedAmount != null && parsedAmount > 0
-            ? parsedAmount
-            : fallback.amount,
-        category:
-            suggestedCategory != null &&
-                availableCategories.contains(suggestedCategory)
-            ? suggestedCategory
-            : availableCategories.contains(fallback.category)
-            ? fallback.category
-            : availableCategories.first,
-        date: parsedDate ?? fallback.date,
-        rawMessage: fallback.rawMessage,
-        type: type,
-        aiAnalyzed: true,
-        aiConfidence: confidence,
-      );
-    } finally {
-      client.close(force: true);
-    }
-  }
 }
 
 class _ParsedAmount {
@@ -1130,7 +1033,6 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   bool _loadingTransactions = true;
   bool _connectingFirestore = false;
   int _pendingPaymentCount = 0;
-  bool _aiAnalysisEnabled = false;
   String? _connectionError;
   String? _lastPresentedSms;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
@@ -1143,6 +1045,8 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   List<String> _expenseCategories = [...defaultExpenseCategories];
   List<String> _incomeCategories = [...defaultIncomeCategories];
   Map<String, String> _categoryIconKeys = {...defaultCategoryIconKeys};
+  Map<String, String> _merchantCategoryRules = {};
+  Map<String, String> _merchantTitleRules = {};
   String _ledgerId = '';
   String _ledgerName = '내 가계부';
   List<String> _ledgerMemberEmails = [];
@@ -1369,11 +1273,6 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
           .get(const GetOptions(source: Source.server))
           .timeout(const Duration(seconds: 10));
       final preferredId = snapshot.data()?['activeLedgerId'] as String?;
-      final aiAnalysisEnabled =
-          snapshot.data()?['aiAnalysisEnabled'] as bool? ?? false;
-      if (mounted && _aiAnalysisEnabled != aiAnalysisEnabled) {
-        setState(() => _aiAnalysisEnabled = aiAnalysisEnabled);
-      }
       if (preferredId == null || preferredId.isEmpty) {
         return;
       }
@@ -1605,6 +1504,14 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
           [];
       final iconKeys = (ledgerData['categoryIcons'] as Map<String, dynamic>?)
           ?.map((key, value) => MapEntry(key, value.toString()));
+      final merchantRules =
+          (ledgerData['merchantCategoryRules'] as Map<String, dynamic>?)?.map(
+            (key, value) => MapEntry(key, value.toString()),
+          );
+      final merchantTitleRules =
+          (ledgerData['merchantTitleRules'] as Map<String, dynamic>?)?.map(
+            (key, value) => MapEntry(key, value.toString()),
+          );
       setState(() {
         _ledgerName = ledgerData['name'] as String? ?? '우리 가계부';
         _ledgerMemberEmails = emails;
@@ -1615,6 +1522,8 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
             ? [...defaultIncomeCategories]
             : incomes;
         _categoryIconKeys = {...defaultCategoryIconKeys, ...?iconKeys};
+        _merchantCategoryRules = {...?merchantRules};
+        _merchantTitleRules = {...?merchantTitleRules};
         _runtimeCategoryIconKeys
           ..clear()
           ..addAll(_categoryIconKeys);
@@ -1764,21 +1673,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         return;
       }
 
-      if (_aiAnalysisEnabled) {
-        try {
-          draft = await AiTransactionService.analyze(
-            user: widget.user,
-            fallback: draft,
-            expenseCategories: _expenseCategories,
-            incomeCategories: _incomeCategories,
-          );
-        } catch (error) {
-          debugPrint('AI transaction analysis failed: $error');
-          if (mounted) {
-            _showMessage('AI 분석에 실패해 기본 인식 결과를 보여드립니다.');
-          }
-        }
-      }
+      draft = _applyLearnedCategory(draft);
 
       final outcome = await _openAddTransaction(draft: draft);
       if (outcome == AddTransactionOutcome.saved ||
@@ -1811,6 +1706,54 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         .timeout(const Duration(seconds: 15));
   }
 
+  SmsTransactionDraft _applyLearnedCategory(SmsTransactionDraft draft) {
+    final key = merchantRuleKey(draft.title, draft.type);
+    final learned = _merchantCategoryRules[key];
+    final learnedTitle = _merchantTitleRules[key];
+    final available = draft.type == TransactionType.expense
+        ? _expenseCategories
+        : _incomeCategories;
+    if (learned == null || !available.contains(learned)) {
+      return draft;
+    }
+    return SmsTransactionDraft(
+      title: learnedTitle?.trim().isNotEmpty == true
+          ? learnedTitle!.trim()
+          : draft.title,
+      amount: draft.amount,
+      category: learned,
+      date: draft.date,
+      rawMessage: draft.rawMessage,
+      type: draft.type,
+    );
+  }
+
+  Future<void> _rememberMerchantCategory(
+    SmsTransactionDraft draft,
+    BudgetTransaction transaction,
+  ) async {
+    if (!isLearnableMerchantTitle(draft.title) ||
+        !isLearnableMerchantTitle(transaction.title)) {
+      return;
+    }
+    final key = merchantRuleKey(draft.title, draft.type);
+    _merchantCategoryRules[key] = transaction.category;
+    _merchantTitleRules[key] = transaction.title;
+    try {
+      await FirebaseFirestore.instance
+          .collection('ledgers')
+          .doc(_ledgerId)
+          .update({
+            'merchantCategoryRules.$key': transaction.category,
+            'merchantTitleRules.$key': transaction.title,
+            'updatedAt': FieldValue.serverTimestamp(),
+          })
+          .timeout(const Duration(seconds: 15));
+    } catch (error) {
+      debugPrint('Merchant category rule save failed: $error');
+    }
+  }
+
   Future<AddTransactionOutcome> _openAddTransaction({
     SmsTransactionDraft? draft,
   }) async {
@@ -1836,6 +1779,9 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     if (result != null) {
       try {
         await _addTransaction(result);
+        if (draft != null) {
+          unawaited(_rememberMerchantCategory(draft, result));
+        }
         if (mounted) {
           _showMessage('거래가 저장되었습니다.');
         }
@@ -2020,20 +1966,6 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       ..addAll(icons);
   }
 
-  Future<void> _setAiAnalysisEnabled(bool enabled) async {
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(widget.user.uid)
-        .set({
-          'aiAnalysisEnabled': enabled,
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true))
-        .timeout(const Duration(seconds: 15));
-    if (mounted) {
-      setState(() => _aiAnalysisEnabled = enabled);
-    }
-  }
-
   Future<void> _openCategoryManager() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -2073,8 +2005,6 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         availableLedgers: _availableLedgers,
         onSelectLedger: _switchLedger,
         onImportPersonalTransactions: _importPersonalTransactions,
-        aiAnalysisEnabled: _aiAnalysisEnabled,
-        onAiAnalysisChanged: _setAiAnalysisEnabled,
         ledgerId: _ledgerId,
         ledgerName: _ledgerName,
         memberEmails: _ledgerMemberEmails,
@@ -3514,8 +3444,6 @@ class TogetherPage extends StatefulWidget {
     required this.availableLedgers,
     required this.onSelectLedger,
     required this.onImportPersonalTransactions,
-    required this.aiAnalysisEnabled,
-    required this.onAiAnalysisChanged,
     required this.ledgerId,
     required this.ledgerName,
     required this.memberEmails,
@@ -3526,8 +3454,6 @@ class TogetherPage extends StatefulWidget {
   final List<LedgerOption> availableLedgers;
   final ValueChanged<String> onSelectLedger;
   final Future<int> Function() onImportPersonalTransactions;
-  final bool aiAnalysisEnabled;
-  final Future<void> Function(bool enabled) onAiAnalysisChanged;
   final String ledgerId;
   final String ledgerName;
   final List<String> memberEmails;
@@ -3539,7 +3465,6 @@ class TogetherPage extends StatefulWidget {
 class _TogetherPageState extends State<TogetherPage> {
   bool _isWorking = false;
   bool _isImporting = false;
-  bool _savingAiSetting = false;
 
   bool get _isShared => widget.ledgerId.startsWith('shared_');
   bool get _hasSharedLedger =>
@@ -3576,60 +3501,6 @@ class _TogetherPageState extends State<TogetherPage> {
 
     if (shouldSignOut == true) {
       await FirebaseAuth.instance.signOut();
-    }
-  }
-
-  Future<void> _changeAiAnalysis(bool enabled) async {
-    if (_savingAiSetting) {
-      return;
-    }
-    if (enabled) {
-      final accepted = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          icon: const Icon(Icons.auto_awesome_rounded),
-          title: const Text('AI 자동분석을 사용할까요?'),
-          content: const SingleChildScrollView(
-            child: Text(
-              '문자·Push에서 자동으로 찾은 내역을 AI가 한 번 더 '
-              '확인하여 사용처와 분류를 보완합니다.\n\n'
-              '카드번호·전화번호 등은 가린 후 OpenAI API로 '
-              '전송됩니다. AI가 틀릴 수 있으므로 저장 전에 반드시 '
-              '확인해 주세요.\n\n'
-              'AI 연결이 안 되면 기존 인식 결과를 그대로 '
-              '보여드립니다.',
-              style: TextStyle(height: 1.5),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('동의하고 사용'),
-            ),
-          ],
-        ),
-      );
-      if (accepted != true) {
-        return;
-      }
-    }
-
-    setState(() => _savingAiSetting = true);
-    try {
-      await widget.onAiAnalysisChanged(enabled);
-      _showMessage(enabled ? 'AI 자동분석을 켰습니다.' : 'AI 자동분석을 껐습니다.');
-    } on FirebaseException catch (error) {
-      _showMessage(_firestoreErrorMessage(error));
-    } on TimeoutException {
-      _showMessage('AI 설정 저장 시간이 초과되었습니다.');
-    } finally {
-      if (mounted) {
-        setState(() => _savingAiSetting = false);
-      }
     }
   }
 
@@ -4281,32 +4152,44 @@ class _TogetherPageState extends State<TogetherPage> {
                         ),
                         const SizedBox(height: 14),
                         Container(
-                          padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+                          padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFFEAF2),
+                            color: const Color(0xFFF2ECFF),
                             borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: const Color(0xFFFFC8DC)),
+                            border: Border.all(color: const Color(0xFFDCCFFF)),
                           ),
-                          child: SwitchListTile.adaptive(
-                            contentPadding: EdgeInsets.zero,
-                            secondary: const Icon(
-                              Icons.auto_awesome_rounded,
-                              color: Color(0xFFCE4F83),
-                            ),
-                            title: const Text(
-                              'AI 자동분석',
-                              style: TextStyle(fontWeight: FontWeight.w900),
-                            ),
-                            subtitle: Text(
-                              _savingAiSetting
-                                  ? '설정을 저장하는 중이에요...'
-                                  : '사용처·금액·분류를 AI가 한 번 더 확인해요.',
-                              style: const TextStyle(height: 1.4),
-                            ),
-                            value: widget.aiAnalysisEnabled,
-                            onChanged: _savingAiSetting
-                                ? null
-                                : _changeAiAnalysis,
+                          child: const Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.school_rounded,
+                                color: Color(0xFF7D62C8),
+                              ),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '무료 자동분류',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      '자동 인식 내역을 수정해 저장하면 '
+                                      '다음에 같은 사용처의 분류를 자동으로 '
+                                      '맞춰요. 외부 AI로 전송하지 않아요.',
+                                      style: TextStyle(
+                                        color: Color(0xFF624AA8),
+                                        height: 1.4,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -4586,42 +4469,36 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                       label: const Text('이 알림 제외'),
                     ),
                   ),
-                  if (widget.initialDraft!.aiAnalyzed) ...[
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 9,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF2ECFF),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.psychology_alt_rounded,
-                            size: 19,
-                            color: Color(0xFF7D62C8),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              widget.initialDraft!.aiConfidence == null
-                                  ? 'AI가 사용처와 분류를 한 번 더 확인했어요.'
-                                  : 'AI 확신도 '
-                                        '${(widget.initialDraft!.aiConfidence! * 100).round()}% · '
-                                        '저장 전에 반드시 확인해 주세요.',
-                              style: const TextStyle(
-                                color: Color(0xFF624AA8),
-                                fontWeight: FontWeight.w700,
-                              ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF2ECFF),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(
+                          Icons.school_rounded,
+                          size: 19,
+                          color: Color(0xFF7D62C8),
+                        ),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '사용처와 분류를 고쳐 저장하면 '
+                            '다음 자동등록에 기억할게요.',
+                            style: TextStyle(
+                              color: Color(0xFF624AA8),
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ],
                 const SizedBox(height: 18),
                 SegmentedButton<TransactionType>(
