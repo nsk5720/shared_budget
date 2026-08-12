@@ -1805,6 +1805,12 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     final action = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      barrierColor: const Color(0x990F0710),
+      backgroundColor: const Color(0xFFFFFBFD),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      clipBehavior: Clip.antiAlias,
       builder: (sheetContext) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
@@ -1827,16 +1833,31 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
                 title: const Text('수정하기'),
                 onTap: () => Navigator.of(sheetContext).pop('edit'),
               ),
-              ListTile(
-                leading: const Icon(
-                  Icons.delete_outline_rounded,
-                  color: Color(0xFFDC2626),
+              Container(
+                margin: const EdgeInsets.only(top: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFE4E9),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFFFB4C3)),
                 ),
-                title: const Text(
-                  '삭제하기',
-                  style: TextStyle(color: Color(0xFFDC2626)),
+                child: ListTile(
+                  leading: const Icon(
+                    Icons.delete_outline_rounded,
+                    color: Color(0xFFB42335),
+                  ),
+                  title: const Text(
+                    '삭제하기',
+                    style: TextStyle(
+                      color: Color(0xFFB42335),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  trailing: const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Color(0xFFB42335),
+                  ),
+                  onTap: () => Navigator.of(sheetContext).pop('delete'),
                 ),
-                onTap: () => Navigator.of(sheetContext).pop('delete'),
               ),
             ],
           ),
@@ -4526,6 +4547,28 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                   ),
                 ),
                 const SizedBox(height: 18),
+                const _InputLabel('분류'),
+                const SizedBox(height: 7),
+                DropdownButtonFormField<String>(
+                  initialValue: _category,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.category_outlined),
+                  ),
+                  items: _categories
+                      .map(
+                        (category) => DropdownMenuItem(
+                          value: category,
+                          child: Text(category),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => _category = value);
+                    }
+                  },
+                ),
+                const SizedBox(height: 15),
                 const _InputLabel('날짜'),
                 const SizedBox(height: 7),
                 InkWell(
@@ -4584,28 +4627,6 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                       return '금액을 입력해 주세요.';
                     }
                     return null;
-                  },
-                ),
-                const SizedBox(height: 15),
-                const _InputLabel('분류'),
-                const SizedBox(height: 7),
-                DropdownButtonFormField<String>(
-                  initialValue: _category,
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.category_outlined),
-                  ),
-                  items: _categories
-                      .map(
-                        (category) => DropdownMenuItem(
-                          value: category,
-                          child: Text(category),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() => _category = value);
-                    }
                   },
                 ),
                 const SizedBox(height: 15),
