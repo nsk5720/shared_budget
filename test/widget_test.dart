@@ -36,6 +36,18 @@ void main() {
     expect(formatWon(-12500), '-12,500');
   });
 
+  test('AI 전송 전에 카드번호와 전화번호를 가린다', () {
+    final masked = maskSensitiveNotification(
+      '카드 1234-5678-9012-3456 35,000원 결제 문의 010-1234-5678',
+    );
+
+    expect(masked, contains('[카드번호 숨김]'));
+    expect(masked, contains('[전화번호 숨김]'));
+    expect(masked, contains('35,000원'));
+    expect(masked, isNot(contains('1234-5678-9012-3456')));
+    expect(masked, isNot(contains('010-1234-5678')));
+  });
+
   test('금액 입력 중 천 단위 쉼표를 자동 적용한다', () {
     final result = WonAmountInputFormatter().formatEditUpdate(
       TextEditingValue.empty,
