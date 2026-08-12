@@ -718,94 +718,239 @@ class SmsTransactionDraft {
   final TransactionType type;
 }
 
+class _ParsedAmount {
+  const _ParsedAmount(this.value, this.match);
+
+  final int value;
+  final RegExpMatch match;
+}
+
 class SmsTransactionParser {
+  static final _amountPattern = RegExp(
+    r'(?:₩|KRW\s*)\s*([\d,]+)|([\d,]+)\s*(?:원|KRW)',
+    caseSensitive: false,
+  );
+  static final _transactionKeywords = RegExp(
+    r'승인|결제|사용|출금|입금|송금|이체|취소|환불|환급|입금완료|출금완료',
+    caseSensitive: false,
+  );
+  static final _incomeKeywords = RegExp(
+    r'입금|급여|월급|이자|배당|송금\s*받|받은\s*송금|환불|환급|취소|캐시백',
+    caseSensitive: false,
+  );
+
   static SmsTransactionDraft? parse(String rawValue) {
-    final newlineIndex = rawValue.indexOf('\n');
-    final message = newlineIndex >= 0
-        ? rawValue.substring(newlineIndex + 1).trim()
-        : rawValue.trim();
-
-    final amountMatch = RegExp(
-      r'(?:₩\s*([\d,]+)|([\d,]+)\s*원)',
-    ).firstMatch(message);
-    if (amountMatch == null) {
+    final rawMessage = rawValue.trim();
+    if (rawMessage.isEmpty) {
+      return null;
+    }
+    final message = _contentWithoutSource(rawMessage);
+    final parsedAmount = _findTransactionAmount(message);
+    if (parsedAmount == null) {
       return null;
     }
 
-    final amountText = amountMatch.group(1) ?? amountMatch.group(2);
-    final amount = int.tryParse(amountText!.replaceAll(',', ''));
-    if (amount == null || amount <= 0) {
-      return null;
-    }
-
-    final now = DateTime.now();
-    var date = now;
-    final dateMatch = RegExp(
-      r'(\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?',
-    ).firstMatch(message);
-    if (dateMatch != null) {
-      final month = int.parse(dateMatch.group(1)!);
-      final day = int.parse(dateMatch.group(2)!);
-      final hour = int.tryParse(dateMatch.group(3) ?? '') ?? 0;
-      final minute = int.tryParse(dateMatch.group(4) ?? '') ?? 0;
-      final year = month > now.month + 1 ? now.year - 1 : now.year;
-      date = DateTime(year, month, day, hour, minute);
-    }
-
-    var title = '카드 결제';
-    final merchantMatch = RegExp(
-      r'\d{1,2}[/-]\d{1,2}(?:\s+\d{1,2}:\d{2})?\s+(.+?)\s+[\d,]+\s*원',
-    ).firstMatch(message);
-    if (merchantMatch != null) {
-      title = merchantMatch.group(1)!.trim();
-    } else {
-      final paymentLine = message
-          .split('\n')
-          .firstWhere(
-            (line) =>
-                RegExp(r'(?:₩\s*[\d,]+|[\d,]+\s*원)').hasMatch(line) &&
-                RegExp(r'승인|결제|사용|출금|입금|취소|환불').hasMatch(line),
-            orElse: () => '',
-          );
-      final cleanedTitle = paymentLine
-          .replaceAll(RegExp(r'\[[^\]]+\]'), ' ')
-          .replaceAll(RegExp(r'(?:₩\s*[\d,]+|[\d,]+\s*원)'), ' ')
-          .replaceAll(RegExp(r'\d{1,2}[/-]\d{1,2}(?:\s+\d{1,2}:\d{2})?'), ' ')
-          .replaceAll(RegExp(r'승인|결제|사용|출금|입금|취소|환불|일시불|할부'), ' ')
-          .replaceAll(RegExp(r'\s+'), ' ')
-          .trim();
-      if (cleanedTitle.isNotEmpty) {
-        title = cleanedTitle;
-      }
-    }
-
-    final type = RegExp(r'입금|급여|송금받').hasMatch(message)
+    final type = _incomeKeywords.hasMatch(message)
         ? TransactionType.income
         : TransactionType.expense;
+    final title = _findTitle(message, parsedAmount.match, type);
     return SmsTransactionDraft(
       title: title,
-      amount: amount,
-      category: type == TransactionType.income ? '기타' : _categoryFor(title),
-      date: date,
-      rawMessage: message,
+      amount: parsedAmount.value,
+      category: _categoryFor(title, message, type),
+      date: _findDate(message),
+      rawMessage: rawMessage,
       type: type,
     );
   }
 
-  static String _categoryFor(String title) {
-    final value = title.toLowerCase();
-    if (value.contains('스타벅스') ||
-        value.contains('카페') ||
-        value.contains('커피')) {
+  static String _contentWithoutSource(String rawMessage) {
+    final lines = rawMessage.split('\n');
+    if (lines.length < 2) {
+      return rawMessage;
+    }
+    final firstLine = lines.first.trim();
+    final remaining = lines.skip(1).join('\n').trim();
+    final firstLooksLikeSource =
+        !_amountPattern.hasMatch(firstLine) &&
+        !_transactionKeywords.hasMatch(firstLine) &&
+        firstLine.length <= 40;
+    return firstLooksLikeSource ? remaining : rawMessage;
+  }
+
+  static _ParsedAmount? _findTransactionAmount(String message) {
+    _ParsedAmount? selected;
+    var selectedScore = -1000;
+    for (final match in _amountPattern.allMatches(message)) {
+      final amountText = match.group(1) ?? match.group(2);
+      final amount = int.tryParse(amountText!.replaceAll(',', ''));
+      if (amount == null || amount <= 0) {
+        continue;
+      }
+      final start = (match.start - 28).clamp(0, message.length);
+      final end = (match.end + 28).clamp(0, message.length);
+      final nearby = message.substring(start, end);
+      var score = _transactionKeywords.hasMatch(nearby) ? 5 : 0;
+      if (RegExp(r'잔액|누적|한도|예정|총액').hasMatch(nearby)) {
+        score -= 4;
+      }
+      if (score > selectedScore) {
+        selected = _ParsedAmount(amount, match);
+        selectedScore = score;
+      }
+    }
+    return selected;
+  }
+
+  static DateTime _findDate(String message) {
+    final now = DateTime.now();
+    final fullDate = RegExp(
+      r'(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?',
+    ).firstMatch(message);
+    if (fullDate != null) {
+      return _safeDate(
+        int.parse(fullDate.group(1)!),
+        int.parse(fullDate.group(2)!),
+        int.parse(fullDate.group(3)!),
+        int.tryParse(fullDate.group(4) ?? '') ?? 0,
+        int.tryParse(fullDate.group(5) ?? '') ?? 0,
+        now,
+      );
+    }
+    final shortDate = RegExp(
+      r'(\d{1,2})[./-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?',
+    ).firstMatch(message);
+    final koreanDate = RegExp(
+      r'(\d{1,2})월\s*(\d{1,2})일(?:\s+(\d{1,2}):?(\d{2}))?',
+    ).firstMatch(message);
+    final match = shortDate ?? koreanDate;
+    if (match == null) {
+      return now;
+    }
+    final month = int.parse(match.group(1)!);
+    final year = month > now.month + 1 ? now.year - 1 : now.year;
+    return _safeDate(
+      year,
+      month,
+      int.parse(match.group(2)!),
+      int.tryParse(match.group(3) ?? '') ?? 0,
+      int.tryParse(match.group(4) ?? '') ?? 0,
+      now,
+    );
+  }
+
+  static DateTime _safeDate(
+    int year,
+    int month,
+    int day,
+    int hour,
+    int minute,
+    DateTime fallback,
+  ) {
+    if (month < 1 ||
+        month > 12 ||
+        day < 1 ||
+        day > 31 ||
+        hour > 23 ||
+        minute > 59) {
+      return fallback;
+    }
+    final value = DateTime(year, month, day, hour, minute);
+    return value.month == month && value.day == day ? value : fallback;
+  }
+
+  static String _findTitle(
+    String message,
+    RegExpMatch amountMatch,
+    TransactionType type,
+  ) {
+    final counterpart = RegExp(
+      r'([0-9A-Za-z가-힣()._-]{2,}?)\s*님?(?:에게|으로부터|에서)',
+    ).firstMatch(message);
+    if (counterpart != null) {
+      return counterpart.group(1)!;
+    }
+
+    final amountLine =
+        message.substring(0, amountMatch.start).split('\n').length - 1;
+    final lines = message.split('\n');
+    final orderedLines = <String>[
+      if (amountLine >= 0 && amountLine < lines.length) lines[amountLine],
+      if (amountLine + 1 < lines.length) lines[amountLine + 1],
+      if (amountLine > 0) lines[amountLine - 1],
+    ];
+    for (final line in orderedLines) {
+      final cleaned = _cleanTitleCandidate(line);
+      if (_isUsefulTitle(cleaned)) {
+        return cleaned;
+      }
+    }
+    return type == TransactionType.income ? '입금' : '카드 결제';
+  }
+
+  static String _cleanTitleCandidate(String value) {
+    return value
+        .replaceAll(RegExp(r'\[[^\]]+\]'), ' ')
+        .replaceAll(_amountPattern, ' ')
+        .replaceAll(RegExp(r'20\d{2}[./-]\d{1,2}[./-]\d{1,2}'), ' ')
+        .replaceAll(RegExp(r'\d{1,2}[./-]\d{1,2}'), ' ')
+        .replaceAll(RegExp(r'\d{1,2}:\d{2}'), ' ')
+        .replaceAll(RegExp(r'\d{2,4}[-*]\d{2,4}[-*\d]+'), ' ')
+        .replaceAll(RegExp(r'\S*\*+\S*\s*님'), ' ')
+        .replaceAll(
+          RegExp(
+            r'승인|결제|사용|출금|입금|송금|이체|취소|환불|환급|일시불|\d+개월\s*할부|체크카드|신용카드|누적|잔액|한도',
+          ),
+          ' ',
+        )
+        .replaceAll(RegExp(r'(?:KB국민|신한|우리|하나|삼성|현대|롯데|NH농협|BC)\s*카드'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static bool _isUsefulTitle(String value) {
+    if (value.length < 2 || value.length > 35) {
+      return false;
+    }
+    return !RegExp(r'^알림$|^카드$|^은행$|^결제$|^입금$').hasMatch(value);
+  }
+
+  static String _categoryFor(
+    String title,
+    String message,
+    TransactionType type,
+  ) {
+    final value = '$title $message'.toLowerCase();
+    if (type == TransactionType.income) {
+      if (RegExp(r'급여|월급|상여|보너스').hasMatch(value)) {
+        return '급여';
+      }
+      if (RegExp(r'용돈|생일|축하').hasMatch(value)) {
+        return '용돈';
+      }
+      if (RegExp(r'이자|배당|캐시백|환급').hasMatch(value)) {
+        return '부수입';
+      }
+      return '기타';
+    }
+    if (RegExp(r'스타벅스|투썸|이디야|메가\s*커피|컴포즈|빽다방|카페|커피').hasMatch(value)) {
       return '카페';
     }
-    if (value.contains('버스') || value.contains('택시') || value.contains('지하철')) {
+    if (RegExp(r'버스|택시|지하철|카카오\s*t|코레일|철도|주유|충전소|하이패스|주차').hasMatch(value)) {
       return '교통';
     }
-    if (value.contains('병원') || value.contains('약국')) {
+    if (RegExp(r'병원|의원|약국|치과|한의원|건강검진').hasMatch(value)) {
       return '의료';
     }
-    if (value.contains('마트') || value.contains('식당') || value.contains('배달')) {
+    if (RegExp(r'쿠팡|네이버\s*페이|올리브영|백화점|무신사|쇼핑|아웃렛').hasMatch(value)) {
+      return '쇼핑';
+    }
+    if (RegExp(r'전기|수도|가스|통신|관리비|보험|월세|렌탈|세탁').hasMatch(value)) {
+      return '생활';
+    }
+    if (RegExp(
+      r'마트|식당|배달|배민|쿠팡이츠|요기요|편의점|gs25|cu|uc|세븐일레븐|맥도날드|버거|치킨|피자',
+    ).hasMatch(value)) {
       return '식비';
     }
     return '기타';
@@ -4315,11 +4460,13 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                 const SizedBox(height: 7),
                 TextFormField(
                   controller: _memoController,
-                  textInputAction: TextInputAction.done,
-                  onFieldSubmitted: (_) => _save(),
+                  keyboardType: TextInputType.multiline,
+                  minLines: widget.initialDraft == null ? 2 : 4,
+                  maxLines: 7,
                   decoration: const InputDecoration(
                     hintText: '기억할 내용을 적어주세요.',
                     prefixIcon: Icon(Icons.edit_note_rounded),
+                    alignLabelWithHint: true,
                   ),
                 ),
                 const SizedBox(height: 24),

@@ -61,7 +61,7 @@ void main() {
     expect(draft.category, '카페');
     expect(draft.date.month, 7);
     expect(draft.date.day, 30);
-    expect(draft.rawMessage, '[우리카드] 07/30 14:20 스타벅스 5,800원 승인');
+    expect(draft.rawMessage, '15881234\n[우리카드] 07/30 14:20 스타벅스 5,800원 승인');
   });
 
   test('카드 Push 알림에서 원화 기호 금액과 사용처를 읽는다', () {
@@ -75,7 +75,7 @@ void main() {
     expect(draft.category, '카페');
     expect(draft.date.month, 8);
     expect(draft.date.day, 11);
-    expect(draft.rawMessage, '[우리카드] 스타벅스 ₩5,800 승인\n08/11 14:20');
+    expect(draft.rawMessage, '우리카드\n[우리카드] 스타벅스 ₩5,800 승인\n08/11 14:20');
   });
 
   test('입금 Push 알림은 수입으로 구분한다', () {
@@ -86,6 +86,53 @@ void main() {
     expect(draft, isNotNull);
     expect(draft!.amount, 30000);
     expect(draft.type, TransactionType.income);
+    expect(draft.title, '김민수');
+  });
+
+  test('잔액이 함께 있어도 실제 결제 금액을 선택한다', () {
+    final draft = SmsTransactionParser.parse(
+      '신한카드\n08/12 18:31 배달의민족 24,900원 승인\n잔액 1,245,100원',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.title, '배달의민족');
+    expect(draft.amount, 24900);
+    expect(draft.category, '식비');
+  });
+
+  test('금액이 먼저 나오는 Push에서 사용처와 쇼핑 분류를 찾는다', () {
+    final draft = SmsTransactionParser.parse(
+      '카카오페이\n35,000원 결제 올리브영 08/12 13:05',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.title, '올리브영');
+    expect(draft.amount, 35000);
+    expect(draft.category, '쇼핑');
+  });
+
+  test('한글 날짜와 급여 입금을 인식한다', () {
+    final draft = SmsTransactionParser.parse(
+      '토스\n8월 12일 09:01 주식회사마음에서 급여 3,200,000원 입금',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.amount, 3200000);
+    expect(draft.type, TransactionType.income);
+    expect(draft.category, '급여');
+    expect(draft.title, '주식회사마음');
+    expect(draft.date.month, 8);
+    expect(draft.date.day, 12);
+  });
+
+  test('KRW 표시 금액도 인식한다', () {
+    final draft = SmsTransactionParser.parse(
+      '현대카드\nKRW 18,500 승인 교보문고 08/12 16:20',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.amount, 18500);
+    expect(draft.title, '교보문고');
   });
 
   testWidgets('문자 원문을 내역 메모에 자동 입력한다', (tester) async {

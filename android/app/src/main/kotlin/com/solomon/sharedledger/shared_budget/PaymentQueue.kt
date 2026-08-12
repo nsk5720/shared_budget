@@ -18,7 +18,10 @@ object PaymentQueue {
     const val openPaymentExtra = "open_pending_sms"
     private const val lastAmountKey = "last_payment_amount"
     private const val lastQueuedAtKey = "last_payment_queued_at"
-    val amountPattern = Regex("""(?:₩\s*[\d,]+|[\d,]+\s*원)""")
+    val amountPattern = Regex(
+        """(?:(?:₩|KRW\s*)\s*[\d,]+|[\d,]+\s*(?:원|KRW))""",
+        RegexOption.IGNORE_CASE,
+    )
     val paymentKeywordPattern = Regex(
         "승인|결제|사용|출금|입금|취소|환불|일시불|할부|체크카드|신용카드|이체",
         RegexOption.IGNORE_CASE,

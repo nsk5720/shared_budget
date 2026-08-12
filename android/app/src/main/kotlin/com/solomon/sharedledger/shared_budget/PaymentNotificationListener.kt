@@ -23,10 +23,14 @@ class PaymentNotificationListener : NotificationListenerService() {
         }
 
         addPart(extras.getCharSequence(Notification.EXTRA_TITLE))
+        addPart(extras.getCharSequence(Notification.EXTRA_TITLE_BIG))
         addPart(extras.getCharSequence(Notification.EXTRA_TEXT))
         addPart(extras.getCharSequence(Notification.EXTRA_BIG_TEXT))
         addPart(extras.getCharSequence(Notification.EXTRA_SUB_TEXT))
+        addPart(extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT))
+        addPart(extras.getCharSequence(Notification.EXTRA_INFO_TEXT))
         extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.forEach(::addPart)
+        addPart(notification.tickerText)
 
         val body = parts.joinToString("\n")
         if (!PaymentQueue.amountPattern.containsMatchIn(body) ||
