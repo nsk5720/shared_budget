@@ -44,7 +44,12 @@ class PaymentNotificationListener : NotificationListenerService() {
             packageManager.getApplicationLabel(applicationInfo).toString()
         }.getOrDefault(packageName)
 
-        PaymentQueue.enqueue(applicationContext, appLabel, body)
+        PaymentQueue.enqueue(
+            applicationContext,
+            appLabel,
+            body,
+            statusBarNotification.postTime,
+        )
     }
 
     companion object {

@@ -142,6 +142,35 @@ void main() {
     expect(draft.date.day, 12);
   });
 
+  test('두 자리 연도와 요일이 포함된 날짜를 인식한다', () {
+    final draft = SmsTransactionParser.parse(
+      '신한카드\n26.08.17(월) 19:42 스타벅스 5,800원 승인',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.date, DateTime(2026, 8, 17, 19, 42));
+  });
+
+  test('한글 날짜와 오후 시간을 인식한다', () {
+    final draft = SmsTransactionParser.parse(
+      '우리카드\n2026년 8월 16일 오후 3시 25분 이마트 42,000원 승인',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.date, DateTime(2026, 8, 16, 15, 25));
+  });
+
+  test('본문에 날짜가 없으면 실제 알림 수신 시각을 사용한다', () {
+    final receivedAt = DateTime(2026, 8, 15, 22, 31);
+    final draft = SmsTransactionParser.parse(
+      '삼성카드\n스타벅스 5,800원 승인',
+      receivedAt: receivedAt,
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.date, receivedAt);
+  });
+
   test('KRW 표시 금액도 인식한다', () {
     final draft = SmsTransactionParser.parse(
       '현대카드\nKRW 18,500 승인 교보문고 08/12 16:20',

@@ -24,6 +24,6 @@ class SmsReceiver : BroadcastReceiver() {
             return
         }
 
-        PaymentQueue.enqueue(context, sender, body)
+        PaymentQueue.enqueue(context, sender, body, messages.first().timestampMillis)
     }
 }

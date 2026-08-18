@@ -732,6 +732,13 @@ class SmsTransactionDraft {
   final TransactionType type;
 }
 
+class PendingPayment {
+  const PendingPayment({required this.rawMessage, required this.receivedAt});
+
+  final String rawMessage;
+  final DateTime receivedAt;
+}
+
 class _ParsedAmount {
   const _ParsedAmount(this.value, this.match);
 
@@ -753,7 +760,7 @@ class SmsTransactionParser {
     caseSensitive: false,
   );
 
-  static SmsTransactionDraft? parse(String rawValue) {
+  static SmsTransactionDraft? parse(String rawValue, {DateTime? receivedAt}) {
     final rawMessage = rawValue.trim();
     if (rawMessage.isEmpty) {
       return null;
@@ -772,7 +779,7 @@ class SmsTransactionParser {
       title: title,
       amount: parsedAmount.value,
       category: _categoryFor(title, message, type),
-      date: _findDate(message),
+      date: _findDate(message, receivedAt ?? DateTime.now()),
       rawMessage: rawMessage,
       type: type,
     );
@@ -816,41 +823,61 @@ class SmsTransactionParser {
     return selected;
   }
 
-  static DateTime _findDate(String message) {
-    final now = DateTime.now();
+  static DateTime _findDate(String message, DateTime receivedAt) {
     final fullDate = RegExp(
-      r'(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?',
+      r'(\d{4}|\d{2})\s*(?:년|[./-])\s*(\d{1,2})\s*(?:월|[./-])\s*'
+      r'(\d{1,2})\s*(?:일)?(?:\s*(?:\([월화수목금토일]\)|[월화수목금토일]요일)?\s*'
+      r'(오전|오후|AM|PM)?\s*(\d{1,2})(?::|시)\s*(\d{2})(?:분)?)?',
+      caseSensitive: false,
     ).firstMatch(message);
     if (fullDate != null) {
+      final rawYear = int.parse(fullDate.group(1)!);
       return _safeDate(
-        int.parse(fullDate.group(1)!),
+        rawYear < 100 ? 2000 + rawYear : rawYear,
         int.parse(fullDate.group(2)!),
         int.parse(fullDate.group(3)!),
-        int.tryParse(fullDate.group(4) ?? '') ?? 0,
-        int.tryParse(fullDate.group(5) ?? '') ?? 0,
-        now,
+        _parseHour(fullDate.group(5), fullDate.group(4)),
+        int.tryParse(fullDate.group(6) ?? '') ?? 0,
+        receivedAt,
       );
     }
     final shortDate = RegExp(
-      r'(\d{1,2})[./-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?',
+      r'(\d{1,2})[./-](\d{1,2})(?:\s*(?:\([월화수목금토일]\)|[월화수목금토일]요일)?\s*'
+      r'(오전|오후|AM|PM)?\s*(\d{1,2})(?::|시)\s*(\d{2})(?:분)?)?',
+      caseSensitive: false,
     ).firstMatch(message);
     final koreanDate = RegExp(
-      r'(\d{1,2})월\s*(\d{1,2})일(?:\s+(\d{1,2}):?(\d{2}))?',
+      r'(\d{1,2})월\s*(\d{1,2})일(?:\s*(?:\([월화수목금토일]\)|[월화수목금토일]요일)?\s*'
+      r'(오전|오후|AM|PM)?\s*(\d{1,2})(?::|시)\s*(\d{2})(?:분)?)?',
+      caseSensitive: false,
     ).firstMatch(message);
     final match = shortDate ?? koreanDate;
     if (match == null) {
-      return now;
+      return receivedAt;
     }
     final month = int.parse(match.group(1)!);
-    final year = month > now.month + 1 ? now.year - 1 : now.year;
+    final year = month > receivedAt.month + 1
+        ? receivedAt.year - 1
+        : receivedAt.year;
     return _safeDate(
       year,
       month,
       int.parse(match.group(2)!),
-      int.tryParse(match.group(3) ?? '') ?? 0,
-      int.tryParse(match.group(4) ?? '') ?? 0,
-      now,
+      _parseHour(match.group(4), match.group(3)),
+      int.tryParse(match.group(5) ?? '') ?? 0,
+      receivedAt,
     );
+  }
+
+  static int _parseHour(String? value, String? meridiem) {
+    var hour = int.tryParse(value ?? '') ?? 0;
+    final marker = meridiem?.toUpperCase();
+    if ((marker == '오후' || marker == 'PM') && hour < 12) {
+      hour += 12;
+    } else if ((marker == '오전' || marker == 'AM') && hour == 12) {
+      hour = 0;
+    }
+    return hour;
   }
 
   static DateTime _safeDate(
@@ -1005,8 +1032,24 @@ class SmsPlatformService {
     await _channel.invokeMethod<void>('openNotificationAccessSettings');
   }
 
-  static Future<String?> getPendingSms() {
-    return _channel.invokeMethod<String>('getPendingSms');
+  static Future<PendingPayment?> getPendingSms() async {
+    final value = await _channel.invokeMapMethod<String, dynamic>(
+      'getPendingSms',
+    );
+    if (value == null) {
+      return null;
+    }
+    final rawMessage = value['rawMessage'] as String?;
+    final receivedAtMillis = value['receivedAt'] as int?;
+    if (rawMessage == null || rawMessage.trim().isEmpty) {
+      return null;
+    }
+    return PendingPayment(
+      rawMessage: rawMessage,
+      receivedAt: receivedAtMillis == null || receivedAtMillis <= 0
+          ? DateTime.now()
+          : DateTime.fromMillisecondsSinceEpoch(receivedAtMillis),
+    );
   }
 
   static Future<int> getPendingPaymentCount() async {
@@ -1641,19 +1684,23 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
     _checkingSms = true;
     try {
-      final rawSms = await SmsPlatformService.getPendingSms();
-      if (rawSms == null || rawSms.trim().isEmpty) {
+      final pendingPayment = await SmsPlatformService.getPendingSms();
+      if (pendingPayment == null) {
         if (mounted) {
           setState(() => _pendingPaymentCount = 0);
         }
         return;
       }
+      final rawSms = pendingPayment.rawMessage;
       if (_lastPresentedSms == rawSms) {
         return;
       }
 
       _lastPresentedSms = rawSms;
-      var draft = SmsTransactionParser.parse(rawSms);
+      var draft = SmsTransactionParser.parse(
+        rawSms,
+        receivedAt: pendingPayment.receivedAt,
+      );
       if (!mounted) {
         return;
       }

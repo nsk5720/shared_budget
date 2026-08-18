@@ -98,7 +98,16 @@ class MainActivity : FlutterActivity() {
                     val queue = JSONArray(
                         preferences.getString(PaymentQueue.pendingQueueKey, "[]"),
                     )
-                    result.success(if (queue.length() > 0) queue.getString(0) else null)
+                    result.success(
+                        if (queue.length() > 0) {
+                            mapOf(
+                                "rawMessage" to PaymentQueue.rawMessageAt(queue, 0),
+                                "receivedAt" to PaymentQueue.receivedAtAt(queue, 0),
+                            )
+                        } else {
+                            null
+                        },
+                    )
                 }
 
                 "getPendingPaymentCount" -> {
@@ -131,7 +140,7 @@ class MainActivity : FlutterActivity() {
                         getSystemService(NotificationManager::class.java)
                             .cancel(PaymentQueue.notificationId)
                     } else {
-                        val nextValue = queue.getString(0)
+                        val nextValue = PaymentQueue.rawMessageAt(queue, 0)
                         val nextBody = nextValue.substringAfter("\n", nextValue)
                         PaymentQueue.showPendingNotification(
                             this,

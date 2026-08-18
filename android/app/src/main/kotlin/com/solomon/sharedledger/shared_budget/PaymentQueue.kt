@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import org.json.JSONArray
+import org.json.JSONObject
 
 object PaymentQueue {
     const val preferencesName = "shared_budget_sms"
@@ -18,6 +19,8 @@ object PaymentQueue {
     const val openPaymentExtra = "open_pending_sms"
     private const val lastAmountKey = "last_payment_amount"
     private const val lastQueuedAtKey = "last_payment_queued_at"
+    private const val rawMessageKey = "rawMessage"
+    private const val receivedAtKey = "receivedAt"
     val amountPattern = Regex(
         """(?:(?:₩|KRW\s*)\s*[\d,]+|[\d,]+\s*(?:원|KRW))""",
         RegexOption.IGNORE_CASE,
@@ -27,14 +30,19 @@ object PaymentQueue {
         RegexOption.IGNORE_CASE,
     )
 
-    fun enqueue(context: Context, source: String, body: String) {
+    fun enqueue(
+        context: Context,
+        source: String,
+        body: String,
+        receivedAt: Long = System.currentTimeMillis(),
+    ) {
         val value = "$source\n$body"
         val preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
         val queue = JSONArray(preferences.getString(pendingQueueKey, "[]"))
 
         // 같은 알림이 갱신되어 여러 번 전달되는 경우 중복으로 쌓지 않습니다.
         for (index in 0 until queue.length()) {
-            if (queue.optString(index) == value) {
+            if (rawMessageAt(queue, index) == value) {
                 return
             }
         }
@@ -49,7 +57,11 @@ object PaymentQueue {
             return
         }
 
-        queue.put(value)
+        queue.put(
+            JSONObject()
+                .put(rawMessageKey, value)
+                .put(receivedAtKey, receivedAt),
+        )
         preferences.edit()
             .putString(pendingQueueKey, queue.toString())
             .putString(lastAmountKey, amount)
@@ -105,5 +117,19 @@ object PaymentQueue {
         } catch (_: SecurityException) {
             // 앱 알림 표시 권한을 거절해도 결제 대기열은 보존합니다.
         }
+    }
+
+    fun rawMessageAt(queue: JSONArray, index: Int): String {
+        val item = queue.opt(index)
+        return if (item is JSONObject) {
+            item.optString(rawMessageKey)
+        } else {
+            queue.optString(index)
+        }
+    }
+
+    fun receivedAtAt(queue: JSONArray, index: Int): Long {
+        val item = queue.opt(index)
+        return if (item is JSONObject) item.optLong(receivedAtKey, 0L) else 0L
     }
 }
