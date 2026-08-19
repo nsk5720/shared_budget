@@ -300,4 +300,51 @@ void main() {
     expect(csv, contains('"\'=위험한 수식"'));
     expect(csv, contains('"쿠폰 ""사용"""'));
   });
+
+  test('CSV 파일을 다시 가져오면 원래 내역이 복원된다', () {
+    final original = BudgetTransaction(
+      id: 'one',
+      title: '동네, 카페',
+      category: '카페',
+      amount: 5800,
+      type: TransactionType.expense,
+      date: DateTime(2026, 8, 19),
+      memo: '쿠폰 "사용"\n친구와 방문',
+    );
+
+    final restored = transactionsFromCsv(transactionsToCsv([original]));
+
+    expect(restored, hasLength(1));
+    expect(restored.single.title, original.title);
+    expect(restored.single.category, original.category);
+    expect(restored.single.amount, original.amount);
+    expect(restored.single.type, original.type);
+    expect(restored.single.date, original.date);
+    expect(restored.single.memo, original.memo);
+  });
+
+  test('필수 열이 없는 CSV는 친절한 오류를 낸다', () {
+    expect(
+      () => transactionsFromCsv('날짜,금액\n2026-08-19,1000'),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('반복 내역 설정을 Firestore 데이터에서 복원한다', () {
+    final rule = RecurringTransactionRule.fromMap({
+      'id': 'rent',
+      'title': '월세',
+      'category': '생활',
+      'amount': 500000,
+      'type': 'expense',
+      'day': 31,
+      'memo': '관리비 제외',
+      'enabled': true,
+    });
+
+    expect(rule, isNotNull);
+    expect(rule!.title, '월세');
+    expect(rule.day, 31);
+    expect(rule.amount, 500000);
+  });
 }

@@ -24,10 +24,14 @@ abstract final class AppColors {
   static const border = Color(0xFFFFDCE9);
 }
 
-const appGradient = LinearGradient(
+LinearGradient get appGradient => LinearGradient(
   begin: Alignment.topLeft,
   end: Alignment.bottomRight,
-  colors: [Color(0xFFF178A5), Color(0xFFB18AE6)],
+  colors: switch (appThemeChoice.value) {
+    AppThemeChoice.pink => const [Color(0xFFF178A5), Color(0xFFB18AE6)],
+    AppThemeChoice.lavender => const [Color(0xFFA58AE8), Color(0xFF7B8EE8)],
+    AppThemeChoice.mint => const [Color(0xFF62C9A7), Color(0xFF72A9D9)],
+  },
 );
 
 class SoftPastelBackground extends StatelessWidget {
@@ -37,30 +41,50 @@ class SoftPastelBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = switch (appThemeChoice.value) {
+      AppThemeChoice.pink => const (
+        background: [Color(0xFFFFF7FB), Color(0xFFFFFBF7)],
+        firstOrb: Color(0x33F4A4C4),
+        secondOrb: Color(0x279D83E2),
+        thirdOrb: Color(0x22F3B994),
+      ),
+      AppThemeChoice.lavender => const (
+        background: [Color(0xFFFAF8FF), Color(0xFFFFFAFC)],
+        firstOrb: Color(0x339D83E2),
+        secondOrb: Color(0x26F4A4C4),
+        thirdOrb: Color(0x2279A8E5),
+      ),
+      AppThemeChoice.mint => const (
+        background: [Color(0xFFF4FFFB), Color(0xFFFFFCF7)],
+        firstOrb: Color(0x335FCBA8),
+        secondOrb: Color(0x2279A8E5),
+        thirdOrb: Color(0x22FFD090),
+      ),
+    };
     return DecoratedBox(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFFFF7FB), Color(0xFFFFFBF7)],
+          colors: palette.background,
         ),
       ),
       child: Stack(
         children: [
-          const Positioned(
+          Positioned(
             top: -85,
             right: -70,
-            child: _PastelOrb(size: 210, color: Color(0x33F4A4C4)),
+            child: _PastelOrb(size: 210, color: palette.firstOrb),
           ),
-          const Positioned(
+          Positioned(
             top: 245,
             left: -95,
-            child: _PastelOrb(size: 190, color: Color(0x279D83E2)),
+            child: _PastelOrb(size: 190, color: palette.secondOrb),
           ),
-          const Positioned(
+          Positioned(
             bottom: 50,
             right: -75,
-            child: _PastelOrb(size: 170, color: Color(0x22F3B994)),
+            child: _PastelOrb(size: 170, color: palette.thirdOrb),
           ),
           Positioned.fill(child: child),
         ],
@@ -88,15 +112,16 @@ class _PastelOrb extends StatelessWidget {
 }
 
 BoxDecoration softCardDecoration({Color color = AppColors.surface}) {
+  final accent = appThemeChoice.value.color;
   return BoxDecoration(
     color: color,
     borderRadius: BorderRadius.circular(24),
-    border: Border.all(color: AppColors.border.withValues(alpha: 0.8)),
-    boxShadow: const [
+    border: Border.all(color: accent.withValues(alpha: 0.2)),
+    boxShadow: [
       BoxShadow(
-        color: Color(0x14A64D72),
+        color: accent.withValues(alpha: 0.09),
         blurRadius: 24,
-        offset: Offset(0, 10),
+        offset: const Offset(0, 10),
       ),
     ],
   );
@@ -201,161 +226,289 @@ class _FirebaseBootstrapState extends State<FirebaseBootstrap> {
   }
 }
 
-class SharedBudgetApp extends StatelessWidget {
+enum AppThemeChoice { pink, lavender, mint }
+
+extension AppThemeChoiceX on AppThemeChoice {
+  String get label => switch (this) {
+    AppThemeChoice.pink => '핑크',
+    AppThemeChoice.lavender => '라벤더',
+    AppThemeChoice.mint => '민트',
+  };
+
+  Color get color => switch (this) {
+    AppThemeChoice.pink => AppColors.rose,
+    AppThemeChoice.lavender => AppColors.lavender,
+    AppThemeChoice.mint => AppColors.mint,
+  };
+}
+
+final appThemeChoice = ValueNotifier(AppThemeChoice.pink);
+
+class AppSettingsService {
+  static const _channel = MethodChannel('shared_budget/settings');
+
+  static Future<AppThemeChoice> getThemeChoice() async {
+    final value = await _channel.invokeMethod<String>('getThemeChoice');
+    return AppThemeChoice.values.firstWhere(
+      (item) => item.name == value,
+      orElse: () => AppThemeChoice.pink,
+    );
+  }
+
+  static Future<void> setThemeChoice(AppThemeChoice choice) async {
+    await _channel.invokeMethod<void>('setThemeChoice', {'value': choice.name});
+    appThemeChoice.value = choice;
+  }
+
+  static Future<bool> hasAppPin() async =>
+      await _channel.invokeMethod<bool>('hasAppPin') ?? false;
+
+  static Future<bool> verifyAppPin(String pin) async =>
+      await _channel.invokeMethod<bool>('verifyAppPin', {'pin': pin}) ?? false;
+
+  static Future<void> setAppPin(String pin) =>
+      _channel.invokeMethod<void>('setAppPin', {'pin': pin});
+
+  static Future<void> removeAppPin() =>
+      _channel.invokeMethod<void>('removeAppPin');
+
+  static Future<List<NotificationAppOption>>
+  getObservedNotificationApps() async {
+    final values = await _channel.invokeListMethod<dynamic>(
+      'getObservedNotificationApps',
+    );
+    return (values ?? const [])
+        .map((value) {
+          final map = Map<Object?, Object?>.from(value as Map);
+          return NotificationAppOption(
+            packageName: map['packageName'] as String? ?? '',
+            label: map['label'] as String? ?? '',
+            selected: map['selected'] as bool? ?? true,
+          );
+        })
+        .where((item) => item.packageName.isNotEmpty)
+        .toList();
+  }
+
+  static Future<void> setSelectedNotificationApps(List<String> packages) =>
+      _channel.invokeMethod<void>('setSelectedNotificationApps', {
+        'packages': packages,
+      });
+
+  static Future<bool?> exportCsv(String fileName, String content) =>
+      _channel.invokeMethod<bool>('exportCsv', {
+        'fileName': fileName,
+        'content': content,
+      });
+
+  static Future<String?> importCsv() =>
+      _channel.invokeMethod<String>('importCsv');
+
+  static Future<void> showBudgetAlert(int expense, int budget) =>
+      _channel.invokeMethod<void>('showBudgetAlert', {
+        'expense': expense,
+        'budget': budget,
+      });
+
+  static Future<void> updateHomeWidget(int expense, int budget) =>
+      _channel.invokeMethod<void>('updateHomeWidget', {
+        'expense': expense,
+        'budget': budget,
+      });
+}
+
+class NotificationAppOption {
+  const NotificationAppOption({
+    required this.packageName,
+    required this.label,
+    required this.selected,
+  });
+
+  final String packageName;
+  final String label;
+  final bool selected;
+}
+
+class SharedBudgetApp extends StatefulWidget {
   const SharedBudgetApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final colorScheme =
-        ColorScheme.fromSeed(
-          seedColor: AppColors.rose,
-          brightness: Brightness.light,
-          surface: AppColors.surface,
-        ).copyWith(
-          primary: AppColors.rose,
-          onPrimary: Colors.white,
-          primaryContainer: AppColors.blush,
-          onPrimaryContainer: AppColors.deepRose,
-          secondary: AppColors.lavender,
-          secondaryContainer: AppColors.paleLavender,
-          tertiary: AppColors.mint,
-          error: AppColors.coral,
-        );
+  State<SharedBudgetApp> createState() => _SharedBudgetAppState();
+}
 
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: '우리 가계부',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: colorScheme,
-        scaffoldBackgroundColor: AppColors.cream,
-        textTheme: Theme.of(context).textTheme.apply(
-          bodyColor: AppColors.ink,
-          displayColor: AppColors.ink,
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.transparent,
-          surfaceTintColor: Colors.transparent,
-          elevation: 0,
-          foregroundColor: AppColors.ink,
-          centerTitle: false,
-        ),
-        cardTheme: CardThemeData(
-          elevation: 0,
-          color: AppColors.surface,
-          surfaceTintColor: Colors.transparent,
-          margin: EdgeInsets.zero,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-            side: const BorderSide(color: AppColors.border),
-          ),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: const Color(0xFFFFF7FA),
-          labelStyle: const TextStyle(color: AppColors.muted),
-          hintStyle: const TextStyle(color: Color(0xFFB3A1AA)),
-          prefixIconColor: AppColors.deepRose,
-          suffixIconColor: AppColors.muted,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 18,
-            vertical: 17,
-          ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: AppColors.border),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: AppColors.border),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: AppColors.rose, width: 1.7),
-          ),
-          errorBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: AppColors.coral),
-          ),
-        ),
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            backgroundColor: AppColors.rose,
-            foregroundColor: Colors.white,
-            elevation: 0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(18),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            textStyle: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-        ),
-        outlinedButtonTheme: OutlinedButtonThemeData(
-          style: OutlinedButton.styleFrom(
-            foregroundColor: AppColors.deepRose,
-            side: const BorderSide(color: AppColors.border),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-            textStyle: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-        ),
-        textButtonTheme: TextButtonThemeData(
-          style: TextButton.styleFrom(
-            foregroundColor: AppColors.deepRose,
-            textStyle: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-        ),
-        floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: AppColors.rose,
-          foregroundColor: Colors.white,
-          shape: StadiumBorder(),
-        ),
-        navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: Colors.transparent,
-          indicatorColor: AppColors.blush,
-          elevation: 0,
-          height: 68,
-          labelTextStyle: WidgetStateProperty.resolveWith((states) {
-            return TextStyle(
-              color: states.contains(WidgetState.selected)
-                  ? AppColors.deepRose
-                  : AppColors.muted,
-              fontWeight: states.contains(WidgetState.selected)
-                  ? FontWeight.w800
-                  : FontWeight.w600,
+class _SharedBudgetAppState extends State<SharedBudgetApp> {
+  @override
+  void initState() {
+    super.initState();
+    AppSettingsService.getThemeChoice()
+        .then<void>((choice) => appThemeChoice.value = choice)
+        .onError((_, _) {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<AppThemeChoice>(
+      valueListenable: appThemeChoice,
+      builder: (context, themeChoice, _) {
+        final accent = themeChoice.color;
+        final colorScheme =
+            ColorScheme.fromSeed(
+              seedColor: accent,
+              brightness: Brightness.light,
+              surface: AppColors.surface,
+            ).copyWith(
+              primary: accent,
+              onPrimary: Colors.white,
+              primaryContainer: AppColors.blush,
+              onPrimaryContainer: AppColors.deepRose,
+              secondary: AppColors.lavender,
+              secondaryContainer: AppColors.paleLavender,
+              tertiary: AppColors.mint,
+              error: AppColors.coral,
             );
-          }),
-        ),
-        dialogTheme: DialogThemeData(
-          backgroundColor: AppColors.surface,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
+
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: '우리 가계부',
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: colorScheme,
+            scaffoldBackgroundColor: AppColors.cream,
+            textTheme: Theme.of(context).textTheme.apply(
+              bodyColor: AppColors.ink,
+              displayColor: AppColors.ink,
+            ),
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Colors.transparent,
+              surfaceTintColor: Colors.transparent,
+              elevation: 0,
+              foregroundColor: AppColors.ink,
+              centerTitle: false,
+            ),
+            cardTheme: CardThemeData(
+              elevation: 0,
+              color: AppColors.surface,
+              surfaceTintColor: Colors.transparent,
+              margin: EdgeInsets.zero,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+                side: const BorderSide(color: AppColors.border),
+              ),
+            ),
+            inputDecorationTheme: InputDecorationTheme(
+              filled: true,
+              fillColor: const Color(0xFFFFF7FA),
+              labelStyle: const TextStyle(color: AppColors.muted),
+              hintStyle: const TextStyle(color: Color(0xFFB3A1AA)),
+              prefixIconColor: AppColors.deepRose,
+              suffixIconColor: AppColors.muted,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 17,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide(color: accent, width: 1.7),
+              ),
+              errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: const BorderSide(color: AppColors.coral),
+              ),
+            ),
+            filledButtonTheme: FilledButtonThemeData(
+              style: FilledButton.styleFrom(
+                backgroundColor: accent,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 14,
+                ),
+                textStyle: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            outlinedButtonTheme: OutlinedButtonThemeData(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.deepRose,
+                side: const BorderSide(color: AppColors.border),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 13,
+                ),
+                textStyle: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.deepRose,
+                textStyle: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            floatingActionButtonTheme: FloatingActionButtonThemeData(
+              backgroundColor: accent,
+              foregroundColor: Colors.white,
+              shape: StadiumBorder(),
+            ),
+            navigationBarTheme: NavigationBarThemeData(
+              backgroundColor: Colors.transparent,
+              indicatorColor: AppColors.blush,
+              elevation: 0,
+              height: 68,
+              labelTextStyle: WidgetStateProperty.resolveWith((states) {
+                return TextStyle(
+                  color: states.contains(WidgetState.selected)
+                      ? AppColors.deepRose
+                      : AppColors.muted,
+                  fontWeight: states.contains(WidgetState.selected)
+                      ? FontWeight.w800
+                      : FontWeight.w600,
+                );
+              }),
+            ),
+            dialogTheme: DialogThemeData(
+              backgroundColor: AppColors.surface,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28),
+              ),
+            ),
+            snackBarTheme: SnackBarThemeData(
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: const Color(0xFF4A3842),
+              contentTextStyle: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            dividerTheme: const DividerThemeData(
+              color: Color(0xFFFFE3ED),
+              thickness: 1,
+            ),
+            bottomSheetTheme: const BottomSheetThemeData(
+              backgroundColor: Colors.transparent,
+              surfaceTintColor: Colors.transparent,
+            ),
           ),
-        ),
-        snackBarTheme: SnackBarThemeData(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFF4A3842),
-          contentTextStyle: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-        ),
-        dividerTheme: const DividerThemeData(
-          color: Color(0xFFFFE3ED),
-          thickness: 1,
-        ),
-        bottomSheetTheme: const BottomSheetThemeData(
-          backgroundColor: Colors.transparent,
-          surfaceTintColor: Colors.transparent,
-        ),
-      ),
-      home: const AuthGate(),
+          home: const AuthGate(),
+        );
+      },
     );
   }
 }
@@ -932,6 +1085,60 @@ class LedgerOption {
   bool get isShared => id.startsWith('shared_');
 }
 
+class RecurringTransactionRule {
+  const RecurringTransactionRule({
+    required this.id,
+    required this.title,
+    required this.category,
+    required this.amount,
+    required this.type,
+    required this.day,
+    this.memo = '',
+    this.enabled = true,
+  });
+
+  final String id;
+  final String title;
+  final String category;
+  final int amount;
+  final TransactionType type;
+  final int day;
+  final String memo;
+  final bool enabled;
+
+  Map<String, Object?> toMap() => {
+    'id': id,
+    'title': title,
+    'category': category,
+    'amount': amount,
+    'type': type.name,
+    'day': day,
+    'memo': memo,
+    'enabled': enabled,
+  };
+
+  static RecurringTransactionRule? fromMap(Object? value) {
+    if (value is! Map) return null;
+    final map = Map<Object?, Object?>.from(value);
+    final title = map['title'] as String? ?? '';
+    final amount = (map['amount'] as num?)?.toInt() ?? 0;
+    final day = (map['day'] as num?)?.toInt() ?? 1;
+    if (title.isEmpty || amount <= 0) return null;
+    return RecurringTransactionRule(
+      id: map['id'] as String? ?? title,
+      title: title,
+      category: map['category'] as String? ?? '기타',
+      amount: amount,
+      type: map['type'] == TransactionType.income.name
+          ? TransactionType.income
+          : TransactionType.expense,
+      day: day.clamp(1, 31),
+      memo: map['memo'] as String? ?? '',
+      enabled: map['enabled'] as bool? ?? true,
+    );
+  }
+}
+
 class SmsTransactionDraft {
   const SmsTransactionDraft({
     required this.title,
@@ -1345,6 +1552,14 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   Map<String, String> _categoryIconKeys = {...defaultCategoryIconKeys};
   Map<String, String> _merchantCategoryRules = {};
   Map<String, String> _merchantTitleRules = {};
+  int _monthlyBudget = 0;
+  List<RecurringTransactionRule> _recurringRules = [];
+  String? _recurringGenerationKey;
+  String? _budgetAlertKey;
+  bool _lockLoaded = false;
+  bool _appLockEnabled = false;
+  bool _appUnlocked = true;
+  DateTime? _backgroundedAt;
   String _ledgerId = '';
   String _ledgerName = '내 가계부';
   List<String> _ledgerMemberEmails = [];
@@ -1357,6 +1572,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _loadAppLock();
     _connectFirestore();
     SmsPlatformService.setNotificationTapHandler(() async {
       _lastPresentedSms = null;
@@ -1377,6 +1593,31 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _refreshPendingPaymentCount();
+      final backgroundedAt = _backgroundedAt;
+      if (_appLockEnabled &&
+          backgroundedAt != null &&
+          DateTime.now().difference(backgroundedAt) >
+              const Duration(seconds: 20)) {
+        setState(() => _appUnlocked = false);
+      }
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _backgroundedAt = DateTime.now();
+    }
+  }
+
+  Future<void> _loadAppLock() async {
+    try {
+      final enabled = await AppSettingsService.hasAppPin();
+      if (mounted) {
+        setState(() {
+          _appLockEnabled = enabled;
+          _appUnlocked = !enabled;
+          _lockLoaded = true;
+        });
+      }
+    } on MissingPluginException {
+      if (mounted) setState(() => _lockLoaded = true);
     }
   }
 
@@ -1595,7 +1836,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       batch.set(database.collection('users').doc(user.uid), {
         'email': user.email,
         'inviteCode': inviteCode,
-        'appBuild': '2026.08.11.2',
+        'appBuild': '2.0.0+16',
         'lastLoginAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       batch.set(
@@ -1814,6 +2055,12 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
           (ledgerData['merchantTitleRules'] as Map<String, dynamic>?)?.map(
             (key, value) => MapEntry(key, value.toString()),
           );
+      final monthlyBudget = (ledgerData['monthlyBudget'] as num?)?.toInt() ?? 0;
+      final recurringRules =
+          (ledgerData['recurringRules'] as List<dynamic>? ?? const [])
+              .map(RecurringTransactionRule.fromMap)
+              .whereType<RecurringTransactionRule>()
+              .toList();
       setState(() {
         _ledgerName = ledgerData['name'] as String? ?? '우리 가계부';
         _ledgerMemberEmails = emails;
@@ -1826,10 +2073,14 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         _categoryIconKeys = {...defaultCategoryIconKeys, ...?iconKeys};
         _merchantCategoryRules = {...?merchantRules};
         _merchantTitleRules = {...?merchantTitleRules};
+        _monthlyBudget = monthlyBudget;
+        _recurringRules = recurringRules;
         _runtimeCategoryIconKeys
           ..clear()
           ..addAll(_categoryIconKeys);
       });
+      unawaited(_generateRecurringTransactions());
+      unawaited(_updateBudgetServices());
     });
 
     _transactionSubscription = ledgerReference
@@ -1875,6 +2126,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
                 _loadingTransactions = false;
                 _connectionError = null;
               });
+              unawaited(_updateBudgetServices());
             }
           },
           onError: (Object error) {
@@ -2065,6 +2317,88 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     } finally {
       _checkingSms = false;
     }
+  }
+
+  Future<void> _generateRecurringTransactions() async {
+    if (_ledgerId.isEmpty || _recurringRules.isEmpty) return;
+    final now = DateTime.now();
+    final enabledIds = _recurringRules
+        .where((rule) => rule.enabled)
+        .map((rule) => rule.id)
+        .join(',');
+    final generationKey = '$_ledgerId-${now.year}-${now.month}-$enabledIds';
+    if (_recurringGenerationKey == generationKey) return;
+    _recurringGenerationKey = generationKey;
+
+    try {
+      final collection = FirebaseFirestore.instance
+          .collection('ledgers')
+          .doc(_ledgerId)
+          .collection('transactions');
+      final lastDay = DateTime(now.year, now.month + 1, 0).day;
+      for (final rule in _recurringRules.where((item) => item.enabled)) {
+        final day = rule.day.clamp(1, lastDay);
+        if (day > now.day) continue;
+        final safeRuleId = rule.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+        final document = collection.doc(
+          'recurring_${safeRuleId}_${now.year}_${now.month.toString().padLeft(2, '0')}',
+        );
+        final existing = await document.get();
+        if (existing.exists) continue;
+        final transaction = BudgetTransaction(
+          id: document.id,
+          title: rule.title,
+          category: rule.category,
+          amount: rule.amount,
+          type: rule.type,
+          date: DateTime(now.year, now.month, day, 9),
+          memo: rule.memo.isEmpty ? '반복 내역 자동등록' : '${rule.memo}\n반복 내역 자동등록',
+        );
+        await document.set(transaction.toFirestore(widget.user.uid));
+      }
+    } catch (error) {
+      _recurringGenerationKey = null;
+      debugPrint('Recurring transaction generation failed: $error');
+    }
+  }
+
+  Future<void> _updateBudgetServices() async {
+    final now = DateTime.now();
+    final expense = _transactions
+        .where(
+          (item) =>
+              item.type == TransactionType.expense &&
+              isSameMonth(item.date, now),
+        )
+        .fold<int>(0, (total, item) => total + item.amount);
+    try {
+      await AppSettingsService.updateHomeWidget(expense, _monthlyBudget);
+      final alertKey = '$_ledgerId-${now.year}-${now.month}';
+      if (_monthlyBudget > 0 &&
+          expense >= _monthlyBudget &&
+          _budgetAlertKey != alertKey) {
+        _budgetAlertKey = alertKey;
+        await AppSettingsService.showBudgetAlert(expense, _monthlyBudget);
+      }
+    } on MissingPluginException {
+      // Android 외 플랫폼에서는 앱 안의 예산 카드만 표시합니다.
+    }
+  }
+
+  Future<void> _saveAutomationSettings({
+    required int monthlyBudget,
+    required List<RecurringTransactionRule> recurringRules,
+  }) async {
+    await FirebaseFirestore.instance
+        .collection('ledgers')
+        .doc(_ledgerId)
+        .update({
+          'monthlyBudget': monthlyBudget,
+          'recurringRules': recurringRules.map((rule) => rule.toMap()).toList(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        })
+        .timeout(const Duration(seconds: 15));
+    _recurringGenerationKey = null;
   }
 
   Future<void> _addTransaction(BudgetTransaction transaction) async {
@@ -2396,6 +2730,98 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     _showMessage('엑셀용 CSV 내역을 복사했습니다.');
   }
 
+  Future<void> _exportCsvFile() async {
+    if (_transactions.isEmpty) {
+      _showMessage('내보낼 내역이 없습니다.');
+      return;
+    }
+    try {
+      final now = DateTime.now();
+      final saved = await AppSettingsService.exportCsv(
+        '우리가계부_${now.year}${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}.csv',
+        transactionsToCsv(_transactions),
+      );
+      if (saved == true && mounted) _showMessage('CSV 파일을 저장했습니다.');
+    } on PlatformException catch (error) {
+      if (mounted) _showMessage('파일을 저장하지 못했습니다: ${error.code}');
+    }
+  }
+
+  Future<void> _importCsvFile() async {
+    try {
+      final content = await AppSettingsService.importCsv();
+      if (content == null || content.trim().isEmpty || !mounted) return;
+      final transactions = transactionsFromCsv(content);
+      if (transactions.isEmpty) {
+        _showMessage('가져올 수 있는 내역을 찾지 못했습니다.');
+        return;
+      }
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('CSV 내역 가져오기'),
+          content: Text('${transactions.length}건을 현재 가계부에 추가할까요?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('가져오기'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      final database = FirebaseFirestore.instance;
+      final collection = database
+          .collection('ledgers')
+          .doc(_ledgerId)
+          .collection('transactions');
+      for (var start = 0; start < transactions.length; start += 400) {
+        final end = start + 400 < transactions.length
+            ? start + 400
+            : transactions.length;
+        final batch = database.batch();
+        for (final transaction in transactions.sublist(start, end)) {
+          batch.set(collection.doc(), transaction.toFirestore(widget.user.uid));
+        }
+        await batch.commit();
+      }
+      if (mounted) _showMessage('${transactions.length}건을 가져왔습니다.');
+    } on FormatException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } on PlatformException catch (error) {
+      if (mounted) _showMessage('파일을 열지 못했습니다: ${error.code}');
+    }
+  }
+
+  Future<void> _openAdvancedSettings() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => AdvancedSettingsPage(
+          monthlyBudget: _monthlyBudget,
+          recurringRules: _recurringRules,
+          expenseCategories: _expenseCategories,
+          incomeCategories: _incomeCategories,
+          onSaveAutomation: _saveAutomationSettings,
+          onExportCsv: _exportCsvFile,
+          onImportCsv: _importCsvFile,
+          onLockChanged: (enabled) {
+            if (mounted) {
+              setState(() {
+                _appLockEnabled = enabled;
+                _appUnlocked = true;
+              });
+            }
+          },
+        ),
+      ),
+    );
+  }
+
   Future<void> _saveCategories({
     required List<String> expenses,
     required List<String> incomes,
@@ -2432,12 +2858,22 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (!_lockLoaded) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (_appLockEnabled && !_appUnlocked) {
+      return AppPinUnlockPage(
+        onUnlocked: () => setState(() => _appUnlocked = true),
+      );
+    }
     final pages = [
       HomePage(
         transactions: _transactions,
         isLoading: _loadingTransactions,
+        monthlyBudget: _monthlyBudget,
         pendingPaymentCount: _pendingPaymentCount,
         onNotificationsPressed: _openPendingPayments,
+        onSettingsPressed: _openAdvancedSettings,
         onViewAll: () => setState(() => _currentIndex = 1),
         onTransactionTap: _openTransactionActions,
       ),
@@ -2455,6 +2891,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         onManageCategories: _openCategoryManager,
         onOpenTrash: _openTrash,
         onCopyCsvBackup: _copyCsvBackup,
+        onOpenAdvancedSettings: _openAdvancedSettings,
         availableLedgers: _availableLedgers,
         onSelectLedger: _switchLedger,
         onImportPersonalTransactions: _importPersonalTransactions,
@@ -2616,16 +3053,20 @@ class HomePage extends StatelessWidget {
     super.key,
     required this.transactions,
     required this.isLoading,
+    required this.monthlyBudget,
     required this.pendingPaymentCount,
     required this.onNotificationsPressed,
+    required this.onSettingsPressed,
     required this.onViewAll,
     required this.onTransactionTap,
   });
 
   final List<BudgetTransaction> transactions;
   final bool isLoading;
+  final int monthlyBudget;
   final int pendingPaymentCount;
   final VoidCallback onNotificationsPressed;
+  final VoidCallback onSettingsPressed;
   final VoidCallback onViewAll;
   final ValueChanged<BudgetTransaction> onTransactionTap;
 
@@ -2662,6 +3103,7 @@ class HomePage extends StatelessWidget {
                 _HomeHeader(
                   pendingPaymentCount: pendingPaymentCount,
                   onNotificationsPressed: onNotificationsPressed,
+                  onSettingsPressed: onSettingsPressed,
                 ),
                 const SizedBox(height: 22),
                 _SummaryCard(
@@ -2669,6 +3111,10 @@ class HomePage extends StatelessWidget {
                   expense: expense,
                   month: now.month,
                 ),
+                if (monthlyBudget > 0) ...[
+                  const SizedBox(height: 14),
+                  BudgetProgressCard(expense: expense, budget: monthlyBudget),
+                ],
                 const SizedBox(height: 14),
                 Row(
                   children: [
@@ -2741,10 +3187,12 @@ class _HomeHeader extends StatelessWidget {
   const _HomeHeader({
     required this.pendingPaymentCount,
     required this.onNotificationsPressed,
+    required this.onSettingsPressed,
   });
 
   final int pendingPaymentCount;
   final VoidCallback onNotificationsPressed;
+  final VoidCallback onSettingsPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -2787,6 +3235,20 @@ class _HomeHeader extends StatelessWidget {
             ],
           ),
         ),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: IconButton(
+            onPressed: onSettingsPressed,
+            color: Theme.of(context).colorScheme.primary,
+            icon: const Icon(Icons.tune_rounded),
+            tooltip: '생활 설정',
+          ),
+        ),
+        const SizedBox(width: 7),
         Stack(
           clipBehavior: Clip.none,
           children: [
@@ -2832,6 +3294,84 @@ class _HomeHeader extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+class BudgetProgressCard extends StatelessWidget {
+  const BudgetProgressCard({
+    super.key,
+    required this.expense,
+    required this.budget,
+  });
+
+  final int expense;
+  final int budget;
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio = budget <= 0 ? 0.0 : expense / budget;
+    final over = expense > budget;
+    final color = over ? AppColors.coral : AppColors.deepRose;
+    return Container(
+      padding: const EdgeInsets.all(17),
+      decoration: softCardDecoration(
+        color: over ? const Color(0xFFFFF0F1) : const Color(0xFFFFF8FB),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.11),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  over ? Icons.warning_amber_rounded : Icons.savings_outlined,
+                  color: color,
+                  size: 21,
+                ),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      over ? '이번 달 예산을 초과했어요' : '이번 달 예산',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      over
+                          ? '${formatWon(expense - budget)}원 초과'
+                          : '${formatWon(budget - expense)}원 남았어요',
+                      style: TextStyle(color: color, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                '${(ratio * 100).round()}%',
+                style: TextStyle(color: color, fontWeight: FontWeight.w900),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: LinearProgressIndicator(
+              value: ratio.clamp(0.0, 1.0),
+              minHeight: 9,
+              color: color,
+              backgroundColor: color.withValues(alpha: 0.1),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3056,14 +3596,171 @@ class TransactionsPage extends StatefulWidget {
 
 class _TransactionsPageState extends State<TransactionsPage> {
   DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
+  final _searchController = TextEditingController();
+  TransactionType? _filterType;
+  String? _filterCategory;
+  int? _minimumAmount;
+  int? _maximumAmount;
+
+  bool get _hasDetailedFilter =>
+      _filterType != null ||
+      _filterCategory != null ||
+      _minimumAmount != null ||
+      _maximumAmount != null;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _openFilterSheet(List<String> categories) async {
+    var selectedType = _filterType;
+    var selectedCategory = _filterCategory;
+    final minimumController = TextEditingController(
+      text: _minimumAmount?.toString() ?? '',
+    );
+    final maximumController = TextEditingController(
+      text: _maximumAmount?.toString() ?? '',
+    );
+    final applied = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => Container(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            18,
+            20,
+            MediaQuery.viewInsetsOf(context).bottom + 24,
+          ),
+          decoration: const BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                '상세 필터',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<TransactionType?>(
+                initialValue: selectedType,
+                decoration: const InputDecoration(labelText: '수입·지출'),
+                items: const [
+                  DropdownMenuItem(value: null, child: Text('전체')),
+                  DropdownMenuItem(
+                    value: TransactionType.expense,
+                    child: Text('지출'),
+                  ),
+                  DropdownMenuItem(
+                    value: TransactionType.income,
+                    child: Text('수입'),
+                  ),
+                ],
+                onChanged: (value) => setSheetState(() => selectedType = value),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String?>(
+                initialValue: selectedCategory,
+                decoration: const InputDecoration(labelText: '분류'),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('전체')),
+                  ...categories.map(
+                    (category) => DropdownMenuItem(
+                      value: category,
+                      child: Text(category),
+                    ),
+                  ),
+                ],
+                onChanged: (value) =>
+                    setSheetState(() => selectedCategory = value),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: minimumController,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [WonAmountInputFormatter()],
+                      decoration: const InputDecoration(labelText: '최소 금액'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: maximumController,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [WonAmountInputFormatter()],
+                      decoration: const InputDecoration(labelText: '최대 금액'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      selectedType = null;
+                      selectedCategory = null;
+                      minimumController.clear();
+                      maximumController.clear();
+                      Navigator.of(sheetContext).pop(true);
+                    },
+                    child: const Text('초기화'),
+                  ),
+                  const Spacer(),
+                  FilledButton(
+                    onPressed: () => Navigator.of(sheetContext).pop(true),
+                    child: const Text('적용하기'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (applied == true && mounted) {
+      setState(() {
+        _filterType = selectedType;
+        _filterCategory = selectedCategory;
+        _minimumAmount = int.tryParse(
+          minimumController.text.replaceAll(',', ''),
+        );
+        _maximumAmount = int.tryParse(
+          maximumController.text.replaceAll(',', ''),
+        );
+      });
+    }
+    minimumController.dispose();
+    maximumController.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final monthlyTransactions =
-        widget.transactions
-            .where((item) => isSameMonth(item.date, _selectedMonth))
-            .toList()
-          ..sort((a, b) => a.date.compareTo(b.date));
+    final sourceMonthlyTransactions = widget.transactions
+        .where((item) => isSameMonth(item.date, _selectedMonth))
+        .toList();
+    final categories =
+        sourceMonthlyTransactions.map((item) => item.category).toSet().toList()
+          ..sort();
+    final query = _searchController.text.trim().toLowerCase();
+    final monthlyTransactions = sourceMonthlyTransactions.where((item) {
+      final searchable = '${item.title} ${item.category} ${item.memo}'
+          .toLowerCase();
+      return (query.isEmpty || searchable.contains(query)) &&
+          (_filterType == null || item.type == _filterType) &&
+          (_filterCategory == null || item.category == _filterCategory) &&
+          (_minimumAmount == null || item.amount >= _minimumAmount!) &&
+          (_maximumAmount == null || item.amount <= _maximumAmount!);
+    }).toList()..sort((a, b) => a.date.compareTo(b.date));
     final groups = <DateTime, List<BudgetTransaction>>{};
     for (final transaction in monthlyTransactions) {
       final day = DateTime(
@@ -3110,6 +3807,42 @@ class _TransactionsPageState extends State<TransactionsPage> {
                   _selectedMonth = nextMonth(_selectedMonth);
                 });
               },
+            ),
+          ),
+          const SizedBox(height: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      hintText: '사용처·분류·메모 검색',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: _searchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() {});
+                              },
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Badge(
+                  isLabelVisible: _hasDetailedFilter,
+                  child: IconButton.filledTonal(
+                    onPressed: () => _openFilterSheet(categories),
+                    icon: const Icon(Icons.tune_rounded),
+                    tooltip: '상세 필터',
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 8),
@@ -4195,6 +4928,601 @@ class _TrashPageState extends State<TrashPage> {
   }
 }
 
+class AppPinUnlockPage extends StatefulWidget {
+  const AppPinUnlockPage({super.key, required this.onUnlocked});
+
+  final VoidCallback onUnlocked;
+
+  @override
+  State<AppPinUnlockPage> createState() => _AppPinUnlockPageState();
+}
+
+class _AppPinUnlockPageState extends State<AppPinUnlockPage> {
+  final _controller = TextEditingController();
+  bool _checking = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _unlock() async {
+    if (_controller.text.length != 4 || _checking) return;
+    setState(() {
+      _checking = true;
+      _error = null;
+    });
+    final verified = await AppSettingsService.verifyAppPin(_controller.text);
+    if (!mounted) return;
+    if (verified) {
+      widget.onUnlocked();
+    } else {
+      setState(() {
+        _checking = false;
+        _error = 'PIN 번호가 맞지 않습니다.';
+        _controller.clear();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SoftPastelBackground(
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(28),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 380),
+                padding: const EdgeInsets.all(28),
+                decoration: softCardDecoration(),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 72,
+                      height: 72,
+                      decoration: BoxDecoration(
+                        gradient: appGradient,
+                        borderRadius: BorderRadius.circular(25),
+                      ),
+                      child: const Icon(
+                        Icons.lock_rounded,
+                        color: Colors.white,
+                        size: 34,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      '가계부 잠금',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    const Text(
+                      '4자리 PIN 번호를 입력해 주세요.',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                    const SizedBox(height: 22),
+                    TextField(
+                      controller: _controller,
+                      autofocus: true,
+                      obscureText: true,
+                      maxLength: 4,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 26,
+                        letterSpacing: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                      onChanged: (_) {
+                        if (_controller.text.length == 4) _unlock();
+                      },
+                      onSubmitted: (_) => _unlock(),
+                      decoration: const InputDecoration(counterText: ''),
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _error!,
+                        style: const TextStyle(color: AppColors.coral),
+                      ),
+                    ],
+                    if (_checking) ...[
+                      const SizedBox(height: 14),
+                      const CircularProgressIndicator(),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AdvancedSettingsPage extends StatefulWidget {
+  const AdvancedSettingsPage({
+    super.key,
+    required this.monthlyBudget,
+    required this.recurringRules,
+    required this.expenseCategories,
+    required this.incomeCategories,
+    required this.onSaveAutomation,
+    required this.onExportCsv,
+    required this.onImportCsv,
+    required this.onLockChanged,
+  });
+
+  final int monthlyBudget;
+  final List<RecurringTransactionRule> recurringRules;
+  final List<String> expenseCategories;
+  final List<String> incomeCategories;
+  final Future<void> Function({
+    required int monthlyBudget,
+    required List<RecurringTransactionRule> recurringRules,
+  })
+  onSaveAutomation;
+  final Future<void> Function() onExportCsv;
+  final Future<void> Function() onImportCsv;
+  final ValueChanged<bool> onLockChanged;
+
+  @override
+  State<AdvancedSettingsPage> createState() => _AdvancedSettingsPageState();
+}
+
+class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
+  late final TextEditingController _budgetController;
+  late List<RecurringTransactionRule> _rules;
+  List<NotificationAppOption> _notificationApps = [];
+  bool _loadingApps = true;
+  bool _pinEnabled = false;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _budgetController = TextEditingController(
+      text: widget.monthlyBudget > 0 ? formatWon(widget.monthlyBudget) : '',
+    );
+    _rules = [...widget.recurringRules];
+    _loadDeviceSettings();
+  }
+
+  Future<void> _loadDeviceSettings() async {
+    try {
+      final results = await Future.wait([
+        AppSettingsService.getObservedNotificationApps(),
+        AppSettingsService.hasAppPin(),
+      ]);
+      if (mounted) {
+        setState(() {
+          _notificationApps = results[0] as List<NotificationAppOption>;
+          _pinEnabled = results[1] as bool;
+          _loadingApps = false;
+        });
+      }
+    } on MissingPluginException {
+      if (mounted) setState(() => _loadingApps = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _budgetController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addRecurringRule() async {
+    final transaction = await showModalBottomSheet<BudgetTransaction>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => AddTransactionSheet(
+        expenseCategories: widget.expenseCategories,
+        incomeCategories: widget.incomeCategories,
+      ),
+    );
+    if (transaction == null || !mounted) return;
+    setState(() {
+      _rules.add(
+        RecurringTransactionRule(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          title: transaction.title,
+          category: transaction.category,
+          amount: transaction.amount,
+          type: transaction.type,
+          day: transaction.date.day,
+          memo: transaction.memo,
+        ),
+      );
+    });
+  }
+
+  Future<String?> _showPinDialog({required bool creating}) async {
+    final pinController = TextEditingController();
+    final confirmController = TextEditingController();
+    String? error;
+    final pin = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(creating ? '4자리 PIN 만들기' : '현재 PIN 확인'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: pinController,
+                autofocus: true,
+                obscureText: true,
+                maxLength: 4,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                  labelText: 'PIN 번호',
+                  counterText: '',
+                ),
+              ),
+              if (creating) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: confirmController,
+                  obscureText: true,
+                  maxLength: 4,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(
+                    labelText: 'PIN 번호 확인',
+                    counterText: '',
+                  ),
+                ),
+              ],
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                Text(error!, style: const TextStyle(color: AppColors.coral)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final value = pinController.text;
+                if (value.length != 4) {
+                  setDialogState(() => error = '4자리 숫자를 입력해 주세요.');
+                } else if (creating && value != confirmController.text) {
+                  setDialogState(() => error = 'PIN 번호가 서로 다릅니다.');
+                } else {
+                  Navigator.of(dialogContext).pop(value);
+                }
+              },
+              child: const Text('확인'),
+            ),
+          ],
+        ),
+      ),
+    );
+    pinController.dispose();
+    confirmController.dispose();
+    return pin;
+  }
+
+  Future<void> _togglePin(bool enabled) async {
+    final pin = await _showPinDialog(creating: enabled);
+    if (pin == null) return;
+    if (enabled) {
+      await AppSettingsService.setAppPin(pin);
+    } else {
+      final verified = await AppSettingsService.verifyAppPin(pin);
+      if (!verified) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('PIN 번호가 맞지 않습니다.')));
+        }
+        return;
+      }
+      await AppSettingsService.removeAppPin();
+    }
+    if (mounted) {
+      setState(() => _pinEnabled = enabled);
+      widget.onLockChanged(enabled);
+    }
+  }
+
+  Future<void> _toggleNotificationApp(int index, bool selected) async {
+    setState(() {
+      final item = _notificationApps[index];
+      _notificationApps[index] = NotificationAppOption(
+        packageName: item.packageName,
+        label: item.label,
+        selected: selected,
+      );
+    });
+    final selectedPackages = _notificationApps
+        .where((item) => item.selected)
+        .map((item) => item.packageName)
+        .toList();
+    await AppSettingsService.setSelectedNotificationApps(selectedPackages);
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await widget.onSaveAutomation(
+        monthlyBudget:
+            int.tryParse(_budgetController.text.replaceAll(',', '')) ?? 0,
+        recurringRules: _rules,
+      );
+      if (mounted) Navigator.of(context).pop();
+    } on FirebaseException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_firestoreErrorMessage(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _section({
+    required String title,
+    required IconData icon,
+    required List<Widget> children,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: softCardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 9),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          '생활 설정',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : _save,
+            child: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('저장'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: SoftPastelBackground(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+          children: [
+            _section(
+              title: '테마 색상',
+              icon: Icons.palette_outlined,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  children: AppThemeChoice.values.map((choice) {
+                    return ChoiceChip(
+                      selected: appThemeChoice.value == choice,
+                      avatar: CircleAvatar(backgroundColor: choice.color),
+                      label: Text(choice.label),
+                      onSelected: (_) async {
+                        await AppSettingsService.setThemeChoice(choice);
+                        if (mounted) setState(() {});
+                      },
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _section(
+              title: '월 예산',
+              icon: Icons.savings_outlined,
+              children: [
+                TextField(
+                  controller: _budgetController,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [WonAmountInputFormatter()],
+                  decoration: const InputDecoration(
+                    hintText: '예: 1,500,000',
+                    suffixText: '원',
+                  ),
+                ),
+                const SizedBox(height: 7),
+                const Text(
+                  '예산에 도달하면 앱 알림과 홈 카드로 알려드려요.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _section(
+              title: '반복 내역',
+              icon: Icons.event_repeat_rounded,
+              children: [
+                if (_rules.isEmpty)
+                  const Text(
+                    '월세·보험·구독료처럼 매달 반복되는 내역을 등록해 보세요.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                ..._rules.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final rule = entry.value;
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: SwitchListTile(
+                      value: rule.enabled,
+                      onChanged: (enabled) {
+                        setState(() {
+                          _rules[index] = RecurringTransactionRule(
+                            id: rule.id,
+                            title: rule.title,
+                            category: rule.category,
+                            amount: rule.amount,
+                            type: rule.type,
+                            day: rule.day,
+                            memo: rule.memo,
+                            enabled: enabled,
+                          );
+                        });
+                      },
+                      title: Text(
+                        rule.title,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: Text(
+                        '매월 ${rule.day}일 · ${formatWon(rule.amount)}원 · ${rule.category}',
+                      ),
+                      secondary: IconButton(
+                        onPressed: () => setState(() => _rules.removeAt(index)),
+                        icon: const Icon(Icons.delete_outline_rounded),
+                        tooltip: '삭제',
+                      ),
+                    ),
+                  );
+                }),
+                OutlinedButton.icon(
+                  onPressed: _addRecurringRule,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('반복 내역 추가'),
+                ),
+                const SizedBox(height: 5),
+                const Text(
+                  '추가 화면의 날짜에서 매월 자동등록할 날짜를 선택하세요.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 11),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _section(
+              title: '자동인식 앱 선택',
+              icon: Icons.notifications_active_outlined,
+              children: [
+                if (_loadingApps)
+                  const Center(child: CircularProgressIndicator())
+                else if (_notificationApps.isEmpty)
+                  const Text(
+                    '결제 Push를 한 번 받은 뒤 다시 열면 은행·카드 앱 목록이 표시됩니다. SMS는 항상 인식합니다.',
+                    style: TextStyle(color: AppColors.muted, height: 1.4),
+                  )
+                else
+                  ..._notificationApps.asMap().entries.map((entry) {
+                    final item = entry.value;
+                    return CheckboxListTile(
+                      value: item.selected,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(item.label),
+                      subtitle: Text(
+                        item.packageName,
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                      onChanged: (value) =>
+                          _toggleNotificationApp(entry.key, value ?? false),
+                    );
+                  }),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _section(
+              title: '앱 잠금',
+              icon: Icons.lock_outline_rounded,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _pinEnabled,
+                  onChanged: _togglePin,
+                  title: const Text('4자리 PIN 잠금'),
+                  subtitle: const Text('앱을 다시 열 때 가계부를 보호합니다.'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _section(
+              title: 'CSV 파일 백업',
+              icon: Icons.folder_copy_outlined,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onExportCsv,
+                        icon: const Icon(Icons.file_download_outlined),
+                        label: const Text('파일 내보내기'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onImportCsv,
+                        icon: const Icon(Icons.file_upload_outlined),
+                        label: const Text('파일 가져오기'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _section(
+              title: '홈 화면 위젯',
+              icon: Icons.widgets_outlined,
+              children: const [
+                Text(
+                  '휴대폰 홈 화면을 길게 누른 뒤 위젯 → 우리 가계부를 선택하면 이번 달 지출과 남은 예산을 볼 수 있어요.',
+                  style: TextStyle(color: AppColors.muted, height: 1.45),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class TogetherPage extends StatefulWidget {
   const TogetherPage({
     super.key,
@@ -4202,6 +5530,7 @@ class TogetherPage extends StatefulWidget {
     required this.onManageCategories,
     required this.onOpenTrash,
     required this.onCopyCsvBackup,
+    required this.onOpenAdvancedSettings,
     required this.availableLedgers,
     required this.onSelectLedger,
     required this.onImportPersonalTransactions,
@@ -4214,6 +5543,7 @@ class TogetherPage extends StatefulWidget {
   final VoidCallback onManageCategories;
   final VoidCallback onOpenTrash;
   final VoidCallback onCopyCsvBackup;
+  final VoidCallback onOpenAdvancedSettings;
   final List<LedgerOption> availableLedgers;
   final ValueChanged<String> onSelectLedger;
   final Future<int> Function() onImportPersonalTransactions;
@@ -4941,6 +6271,11 @@ class _TogetherPageState extends State<TogetherPage> {
                               onPressed: widget.onCopyCsvBackup,
                               icon: const Icon(Icons.table_view_rounded),
                               label: const Text('CSV 백업 복사'),
+                            ),
+                            FilledButton.tonalIcon(
+                              onPressed: widget.onOpenAdvancedSettings,
+                              icon: const Icon(Icons.tune_rounded),
+                              label: const Text('생활 설정'),
                             ),
                           ],
                         ),
@@ -5731,6 +7066,112 @@ String transactionsToCsv(List<BudgetTransaction> transactions) {
     ),
   ];
   return rows.map((row) => row.map(_csvCell).join(',')).join('\r\n');
+}
+
+List<BudgetTransaction> transactionsFromCsv(String content) {
+  final rows = _parseCsvRows(content.replaceFirst('\uFEFF', ''));
+  if (rows.isEmpty) return const [];
+
+  final headers = rows.first
+      .map((value) => value.trim().replaceFirst('\uFEFF', ''))
+      .toList();
+  const requiredHeaders = ['날짜', '구분', '분류', '사용처', '금액', '메모'];
+  for (final header in requiredHeaders) {
+    if (!headers.contains(header)) {
+      throw FormatException('CSV에 "$header" 열이 없습니다. 앱에서 내보낸 파일인지 확인해 주세요.');
+    }
+  }
+
+  final indexes = {
+    for (final header in requiredHeaders) header: headers.indexOf(header),
+  };
+  final transactions = <BudgetTransaction>[];
+  for (var rowIndex = 1; rowIndex < rows.length; rowIndex++) {
+    final row = rows[rowIndex];
+    if (row.every((value) => value.trim().isEmpty)) continue;
+
+    String cell(String header) {
+      final index = indexes[header]!;
+      return index < row.length ? row[index].trim() : '';
+    }
+
+    final date = DateTime.tryParse(cell('날짜'));
+    final title = _restoreCsvFormulaValue(cell('사용처'));
+    final amount = int.tryParse(cell('금액').replaceAll(RegExp(r'[^0-9-]'), ''));
+    if (date == null || title.isEmpty || amount == null || amount <= 0) {
+      throw FormatException('${rowIndex + 1}번째 줄의 날짜, 사용처 또는 금액을 확인해 주세요.');
+    }
+
+    final typeValue = cell('구분').toLowerCase();
+    final type = typeValue == '수입' || typeValue == 'income'
+        ? TransactionType.income
+        : TransactionType.expense;
+    transactions.add(
+      BudgetTransaction(
+        id: 'csv_${DateTime.now().microsecondsSinceEpoch}_$rowIndex',
+        title: title,
+        category: _restoreCsvFormulaValue(cell('분류')).isEmpty
+            ? (type == TransactionType.income ? '기타 수입' : '기타')
+            : _restoreCsvFormulaValue(cell('분류')),
+        amount: amount,
+        type: type,
+        date: DateTime(date.year, date.month, date.day),
+        memo: _restoreCsvFormulaValue(cell('메모')),
+      ),
+    );
+  }
+  return transactions;
+}
+
+List<List<String>> _parseCsvRows(String content) {
+  final rows = <List<String>>[];
+  var row = <String>[];
+  final cell = StringBuffer();
+  var quoted = false;
+
+  for (var index = 0; index < content.length; index++) {
+    final character = content[index];
+    if (character == '"') {
+      if (quoted && index + 1 < content.length && content[index + 1] == '"') {
+        cell.write('"');
+        index++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character == ',' && !quoted) {
+      row.add(cell.toString());
+      cell.clear();
+    } else if ((character == '\n' || character == '\r') && !quoted) {
+      row.add(cell.toString());
+      cell.clear();
+      if (row.any((value) => value.isNotEmpty)) rows.add(row);
+      row = <String>[];
+      if (character == '\r' &&
+          index + 1 < content.length &&
+          content[index + 1] == '\n') {
+        index++;
+      }
+    } else {
+      cell.write(character);
+    }
+  }
+  if (quoted) {
+    throw const FormatException('CSV의 따옴표 형식이 올바르지 않습니다.');
+  }
+  if (cell.isNotEmpty || row.isNotEmpty) {
+    row.add(cell.toString());
+    if (row.any((value) => value.isNotEmpty)) rows.add(row);
+  }
+  return rows;
+}
+
+String _restoreCsvFormulaValue(String value) {
+  if (value.length >= 2 &&
+      value.startsWith("'") &&
+      RegExp(r'^[=+\-@\t\r]').hasMatch(value.substring(1))) {
+    return value.substring(1);
+  }
+  return value;
 }
 
 String _csvCell(String value) {

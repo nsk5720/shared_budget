@@ -1,6 +1,7 @@
 package com.solomon.sharedledger.shared_budget
 
 import android.Manifest
+import android.app.Activity
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,10 +14,15 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : FlutterActivity() {
     private val channelName = "shared_budget/sms"
+    private val settingsChannelName = "shared_budget/settings"
     private var methodChannel: MethodChannel? = null
+    private var settingsChannel: MethodChannel? = null
+    private var pendingCsvResult: MethodChannel.Result? = null
+    private var pendingCsvContent: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -206,6 +212,128 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        settingsChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            settingsChannelName,
+        )
+        settingsChannel?.setMethodCallHandler { call, result ->
+            val preferences = getSharedPreferences("shared_budget_settings", MODE_PRIVATE)
+            when (call.method) {
+                "getObservedNotificationApps" -> {
+                    val smsPreferences = getSharedPreferences(
+                        PaymentQueue.preferencesName,
+                        MODE_PRIVATE,
+                    )
+                    val observed = JSONObject(
+                        smsPreferences.getString(PaymentQueue.observedAppsKey, "{}"),
+                    )
+                    val selected = smsPreferences
+                        .getStringSet(PaymentQueue.selectedAppsKey, emptySet())
+                        .orEmpty()
+                    val selectionConfigured = smsPreferences.getBoolean(
+                        PaymentQueue.selectedAppsConfiguredKey,
+                        false,
+                    )
+                    val apps = observed.keys().asSequence().map { packageName ->
+                        mapOf(
+                            "packageName" to packageName,
+                            "label" to observed.optString(packageName, packageName),
+                            "selected" to (!selectionConfigured || packageName in selected),
+                        )
+                    }.sortedBy { it["label"].toString() }.toList()
+                    result.success(apps)
+                }
+
+                "setSelectedNotificationApps" -> {
+                    val packages = call.argument<List<String>>("packages").orEmpty().toSet()
+                    getSharedPreferences(PaymentQueue.preferencesName, MODE_PRIVATE)
+                        .edit()
+                        .putStringSet(PaymentQueue.selectedAppsKey, packages)
+                        .putBoolean(PaymentQueue.selectedAppsConfiguredKey, true)
+                        .apply()
+                    result.success(null)
+                }
+
+                "getThemeChoice" -> result.success(
+                    preferences.getString("theme_choice", "pink"),
+                )
+
+                "setThemeChoice" -> {
+                    preferences.edit()
+                        .putString("theme_choice", call.argument<String>("value") ?: "pink")
+                        .apply()
+                    result.success(null)
+                }
+
+                "hasAppPin" -> result.success(AppSecurity.hasPin(this))
+                "verifyAppPin" -> result.success(
+                    AppSecurity.verifyPin(this, call.argument<String>("pin").orEmpty()),
+                )
+                "setAppPin" -> {
+                    AppSecurity.setPin(this, call.argument<String>("pin").orEmpty())
+                    result.success(null)
+                }
+                "removeAppPin" -> {
+                    AppSecurity.removePin(this)
+                    result.success(null)
+                }
+
+                "showBudgetAlert" -> {
+                    PaymentQueue.showBudgetAlert(
+                        this,
+                        call.argument<Number>("expense")?.toLong() ?: 0L,
+                        call.argument<Number>("budget")?.toLong() ?: 0L,
+                    )
+                    result.success(null)
+                }
+
+                "updateHomeWidget" -> {
+                    BudgetWidgetProvider.updateAll(
+                        this,
+                        call.argument<Number>("expense")?.toLong() ?: 0L,
+                        call.argument<Number>("budget")?.toLong() ?: 0L,
+                    )
+                    result.success(null)
+                }
+
+                "exportCsv" -> {
+                    if (pendingCsvResult != null) {
+                        result.error("busy", "다른 파일 작업이 진행 중입니다.", null)
+                    } else {
+                        pendingCsvResult = result
+                        pendingCsvContent = call.argument<String>("content").orEmpty()
+                        val fileName = call.argument<String>("fileName")
+                            ?: "shared-budget.csv"
+                        startActivityForResult(
+                            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                                type = "text/csv"
+                                putExtra(Intent.EXTRA_TITLE, fileName)
+                            },
+                            exportCsvRequestCode,
+                        )
+                    }
+                }
+
+                "importCsv" -> {
+                    if (pendingCsvResult != null) {
+                        result.error("busy", "다른 파일 작업이 진행 중입니다.", null)
+                    } else {
+                        pendingCsvResult = result
+                        startActivityForResult(
+                            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                                type = "text/*"
+                            },
+                            importCsvRequestCode,
+                        )
+                    }
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+
         if (intent?.getBooleanExtra(PaymentQueue.openPaymentExtra, false) == true) {
             methodChannel?.invokeMethod("smsNotificationTapped", null)
         }
@@ -217,5 +345,49 @@ class MainActivity : FlutterActivity() {
         if (intent.getBooleanExtra(PaymentQueue.openPaymentExtra, false)) {
             methodChannel?.invokeMethod("smsNotificationTapped", null)
         }
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val result = pendingCsvResult ?: return
+        if (resultCode != Activity.RESULT_OK || data?.data == null) {
+            result.success(null)
+            clearPendingCsvOperation()
+            return
+        }
+        try {
+            if (requestCode == exportCsvRequestCode) {
+                val output = contentResolver.openOutputStream(data.data!!)
+                    ?: error("선택한 파일을 열 수 없습니다.")
+                output.bufferedWriter(Charsets.UTF_8)
+                    .use { writer ->
+                        writer.write("\uFEFF")
+                        writer.write(pendingCsvContent.orEmpty())
+                    }
+                result.success(true)
+            } else if (requestCode == importCsvRequestCode) {
+                val input = contentResolver.openInputStream(data.data!!)
+                    ?: error("선택한 파일을 열 수 없습니다.")
+                val content = input.bufferedReader().use { it.readText() }
+                result.success(content)
+            } else {
+                result.success(null)
+            }
+        } catch (error: Exception) {
+            result.error("file_error", error.message, null)
+        } finally {
+            clearPendingCsvOperation()
+        }
+    }
+
+    private fun clearPendingCsvOperation() {
+        pendingCsvResult = null
+        pendingCsvContent = null
+    }
+
+    companion object {
+        private const val exportCsvRequestCode = 3101
+        private const val importCsvRequestCode = 3102
     }
 }

@@ -17,6 +17,11 @@ object PaymentQueue {
     const val notificationChannelId = "payment_sms"
     const val notificationId = 2107
     const val openPaymentExtra = "open_pending_sms"
+    const val observedAppsKey = "observed_payment_apps"
+    const val selectedAppsKey = "selected_payment_apps"
+    const val selectedAppsConfiguredKey = "selected_payment_apps_configured"
+    const val budgetNotificationChannelId = "monthly_budget"
+    const val budgetNotificationId = 2110
     private const val rawMessageKey = "rawMessage"
     private const val receivedAtKey = "receivedAt"
     val amountPattern = Regex(
@@ -107,6 +112,50 @@ object PaymentQueue {
             manager.notify(notificationId, notification)
         } catch (_: SecurityException) {
             // 앱 알림 표시 권한을 거절해도 결제 대기열은 보존합니다.
+        }
+    }
+
+    fun showBudgetAlert(context: Context, expense: Long, budget: Long) {
+        if (budget <= 0L || expense < budget) return
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    budgetNotificationChannelId,
+                    "월 예산 알림",
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply {
+                    description = "설정한 월 예산에 도달하거나 초과하면 알려줍니다."
+                },
+            )
+        }
+        val openIntent = PendingIntent.getActivity(
+            context,
+            1002,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val over = expense - budget
+        val text = if (over > 0) {
+            "이번 달 예산을 ${String.format("%,d", over)}원 초과했어요."
+        } else {
+            "이번 달 예산에 도달했어요."
+        }
+        val notification = NotificationCompat.Builder(context, budgetNotificationChannelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("예산을 확인해 주세요")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(openIntent)
+            .setAutoCancel(true)
+            .build()
+        try {
+            manager.notify(budgetNotificationId, notification)
+        } catch (_: SecurityException) {
+            // 알림 권한이 없어도 앱 안의 예산 진행률은 계속 표시됩니다.
         }
     }
 

@@ -3,6 +3,7 @@ package com.solomon.sharedledger.shared_budget
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import org.json.JSONObject
 
 class PaymentNotificationListener : NotificationListenerService() {
     override fun onNotificationPosted(statusBarNotification: StatusBarNotification) {
@@ -43,6 +44,29 @@ class PaymentNotificationListener : NotificationListenerService() {
             val applicationInfo = packageManager.getApplicationInfo(packageName, 0)
             packageManager.getApplicationLabel(applicationInfo).toString()
         }.getOrDefault(packageName)
+
+        val preferences = applicationContext.getSharedPreferences(
+            PaymentQueue.preferencesName,
+            MODE_PRIVATE,
+        )
+        val observedApps = JSONObject(
+            preferences.getString(PaymentQueue.observedAppsKey, "{}"),
+        )
+        observedApps.put(packageName, appLabel)
+        preferences.edit()
+            .putString(PaymentQueue.observedAppsKey, observedApps.toString())
+            .apply()
+
+        val selectedApps = preferences
+            .getStringSet(PaymentQueue.selectedAppsKey, emptySet())
+            .orEmpty()
+        val selectionConfigured = preferences.getBoolean(
+            PaymentQueue.selectedAppsConfiguredKey,
+            false,
+        )
+        if (selectionConfigured && packageName !in selectedApps) {
+            return
+        }
 
         PaymentQueue.enqueue(
             applicationContext,
