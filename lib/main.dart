@@ -8,8 +8,110 @@ import 'package:flutter/services.dart';
 
 import 'firebase_options.dart';
 
+abstract final class AppColors {
+  static const rose = Color(0xFFE85D93);
+  static const deepRose = Color(0xFFB83D70);
+  static const blush = Color(0xFFFFE4EF);
+  static const paleBlush = Color(0xFFFFF3F8);
+  static const lavender = Color(0xFF9276D9);
+  static const paleLavender = Color(0xFFF0EBFF);
+  static const cream = Color(0xFFFFFAF7);
+  static const surface = Color(0xFFFFFEFF);
+  static const ink = Color(0xFF392D34);
+  static const muted = Color(0xFF806F78);
+  static const mint = Color(0xFF4BAF8C);
+  static const coral = Color(0xFFE76D73);
+  static const border = Color(0xFFFFDCE9);
+}
+
+const appGradient = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [Color(0xFFF178A5), Color(0xFFB18AE6)],
+);
+
+class SoftPastelBackground extends StatelessWidget {
+  const SoftPastelBackground({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFFFF7FB), Color(0xFFFFFBF7)],
+        ),
+      ),
+      child: Stack(
+        children: [
+          const Positioned(
+            top: -85,
+            right: -70,
+            child: _PastelOrb(size: 210, color: Color(0x33F4A4C4)),
+          ),
+          const Positioned(
+            top: 245,
+            left: -95,
+            child: _PastelOrb(size: 190, color: Color(0x279D83E2)),
+          ),
+          const Positioned(
+            bottom: 50,
+            right: -75,
+            child: _PastelOrb(size: 170, color: Color(0x22F3B994)),
+          ),
+          Positioned.fill(child: child),
+        ],
+      ),
+    );
+  }
+}
+
+class _PastelOrb extends StatelessWidget {
+  const _PastelOrb({required this.size, required this.color});
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      ),
+    );
+  }
+}
+
+BoxDecoration softCardDecoration({Color color = AppColors.surface}) {
+  return BoxDecoration(
+    color: color,
+    borderRadius: BorderRadius.circular(24),
+    border: Border.all(color: AppColors.border.withValues(alpha: 0.8)),
+    boxShadow: const [
+      BoxShadow(
+        color: Color(0x14A64D72),
+        blurRadius: 24,
+        offset: Offset(0, 10),
+      ),
+    ],
+  );
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: AppColors.cream,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    ),
+  );
   runApp(const FirebaseBootstrap());
 }
 
@@ -104,77 +206,149 @@ class SharedBudgetApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Color(0xFFE86A9D);
-    const background = Color(0xFFFFF8FB);
+    final colorScheme =
+        ColorScheme.fromSeed(
+          seedColor: AppColors.rose,
+          brightness: Brightness.light,
+          surface: AppColors.surface,
+        ).copyWith(
+          primary: AppColors.rose,
+          onPrimary: Colors.white,
+          primaryContainer: AppColors.blush,
+          onPrimaryContainer: AppColors.deepRose,
+          secondary: AppColors.lavender,
+          secondaryContainer: AppColors.paleLavender,
+          tertiary: AppColors.mint,
+          error: AppColors.coral,
+        );
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: '우리 가계부',
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: seed,
-          brightness: Brightness.light,
-          surface: const Color(0xFFFFFBFD),
+        colorScheme: colorScheme,
+        scaffoldBackgroundColor: AppColors.cream,
+        textTheme: Theme.of(context).textTheme.apply(
+          bodyColor: AppColors.ink,
+          displayColor: AppColors.ink,
         ),
-        scaffoldBackgroundColor: background,
         appBarTheme: const AppBarTheme(
-          backgroundColor: background,
+          backgroundColor: Colors.transparent,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
+          foregroundColor: AppColors.ink,
+          centerTitle: false,
         ),
         cardTheme: CardThemeData(
           elevation: 0,
-          color: const Color(0xFFFFFEFF),
+          color: AppColors.surface,
+          surfaceTintColor: Colors.transparent,
           margin: EdgeInsets.zero,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-            side: const BorderSide(color: Color(0xFFFFE5EF)),
+            borderRadius: BorderRadius.circular(24),
+            side: const BorderSide(color: AppColors.border),
           ),
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: const Color(0xFFFFEFF5),
+          fillColor: const Color(0xFFFFF7FA),
+          labelStyle: const TextStyle(color: AppColors.muted),
+          hintStyle: const TextStyle(color: Color(0xFFB3A1AA)),
+          prefixIconColor: AppColors.deepRose,
+          suffixIconColor: AppColors.muted,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 18,
+            vertical: 17,
+          ),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(18),
-            borderSide: BorderSide.none,
+            borderSide: const BorderSide(color: AppColors.border),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(18),
-            borderSide: BorderSide.none,
+            borderSide: const BorderSide(color: AppColors.border),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: seed, width: 1.5),
+            borderSide: const BorderSide(color: AppColors.rose, width: 1.7),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: const BorderSide(color: AppColors.coral),
           ),
         ),
         filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
+            backgroundColor: AppColors.rose,
+            foregroundColor: Colors.white,
+            elevation: 0,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(18),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            textStyle: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.deepRose,
+            side: const BorderSide(color: AppColors.border),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+            textStyle: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            foregroundColor: AppColors.deepRose,
+            textStyle: const TextStyle(fontWeight: FontWeight.w700),
           ),
         ),
         floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: Color(0xFFE86A9D),
+          backgroundColor: AppColors.rose,
           foregroundColor: Colors.white,
           shape: StadiumBorder(),
         ),
         navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: const Color(0xFFFFFBFD),
-          indicatorColor: const Color(0xFFFFD9E8),
+          backgroundColor: Colors.transparent,
+          indicatorColor: AppColors.blush,
           elevation: 0,
+          height: 68,
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             return TextStyle(
               color: states.contains(WidgetState.selected)
-                  ? const Color(0xFFB83F73)
-                  : const Color(0xFF7E6E76),
+                  ? AppColors.deepRose
+                  : AppColors.muted,
               fontWeight: states.contains(WidgetState.selected)
                   ? FontWeight.w800
                   : FontWeight.w600,
             );
           }),
+        ),
+        dialogTheme: DialogThemeData(
+          backgroundColor: AppColors.surface,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+          ),
+        ),
+        snackBarTheme: SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFF4A3842),
+          contentTextStyle: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        dividerTheme: const DividerThemeData(
+          color: Color(0xFFFFE3ED),
+          thickness: 1,
         ),
         bottomSheetTheme: const BottomSheetThemeData(
           backgroundColor: Colors.transparent,
@@ -412,159 +586,201 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 430),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      width: 76,
-                      height: 76,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primaryContainer,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.account_balance_wallet_rounded,
-                        size: 36,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                    const SizedBox(height: 22),
-                    Text(
-                      _isSignUp ? '우리 가계부 시작하기' : '다시 만나서 반가워요',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _isSignUp
-                          ? '계정을 만들고 가계부를 안전하게 저장하세요.'
-                          : '로그인하고 저장된 가계부를 불러오세요.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Color(0xFF6B7280)),
-                    ),
-                    const SizedBox(height: 32),
-                    TextFormField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(
-                        labelText: '이메일',
-                        prefixIcon: Icon(Icons.email_outlined),
-                      ),
-                      validator: (value) {
-                        if (value == null ||
-                            !RegExp(r'^[^@]+@[^@]+\.[^@]+$').hasMatch(value)) {
-                          return '올바른 이메일을 입력해 주세요.';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _passwordController,
-                      obscureText: _obscurePassword,
-                      textInputAction: TextInputAction.done,
-                      onFieldSubmitted: (_) => _submit(),
-                      decoration: InputDecoration(
-                        labelText: '비밀번호',
-                        prefixIcon: const Icon(Icons.lock_outline_rounded),
-                        suffixIcon: IconButton(
-                          onPressed: () {
-                            setState(
-                              () => _obscurePassword = !_obscurePassword,
-                            );
-                          },
-                          icon: Icon(
-                            _obscurePassword
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
+      body: SoftPastelBackground(
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 430),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+                  decoration: softCardDecoration(
+                    color: Colors.white.withValues(alpha: 0.94),
+                  ),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 82,
+                            height: 82,
+                            decoration: BoxDecoration(
+                              gradient: appGradient,
+                              borderRadius: BorderRadius.circular(29),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x35E85D93),
+                                  blurRadius: 24,
+                                  offset: Offset(0, 10),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.favorite_rounded,
+                              size: 38,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
-                      ),
-                      validator: (value) {
-                        if (value == null || value.length < 6) {
-                          return '비밀번호는 6자 이상 입력해 주세요.';
-                        }
-                        return null;
-                      },
-                    ),
-                    if (!_isSignUp) ...[
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          TextButton(
-                            onPressed: _isLoading ? null : _showFindId,
-                            child: const Text('아이디 찾기'),
+                        const SizedBox(height: 16),
+                        Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 13,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.paleLavender,
+                              borderRadius: BorderRadius.circular(99),
+                            ),
+                            child: const Text(
+                              '소중한 하루를 함께 기록해요 ✿',
+                              style: TextStyle(
+                                color: AppColors.lavender,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
                           ),
-                          const Text(
-                            '|',
-                            style: TextStyle(color: Color(0xFFD1D5DB)),
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          _isSignUp ? '우리 가계부 시작하기' : '다시 만나서 반가워요',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w900,
                           ),
-                          TextButton(
-                            onPressed: _isLoading ? null : _showPasswordReset,
-                            child: const Text('비밀번호 재설정'),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _isSignUp
+                              ? '계정을 만들고 가계부를 안전하게 저장하세요.'
+                              : '로그인하고 저장된 가계부를 불러오세요.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFF6B7280)),
+                        ),
+                        const SizedBox(height: 32),
+                        TextFormField(
+                          controller: _emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction.next,
+                          decoration: const InputDecoration(
+                            labelText: '이메일',
+                            prefixIcon: Icon(Icons.email_outlined),
+                          ),
+                          validator: (value) {
+                            if (value == null ||
+                                !RegExp(
+                                  r'^[^@]+@[^@]+\.[^@]+$',
+                                ).hasMatch(value)) {
+                              return '올바른 이메일을 입력해 주세요.';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _passwordController,
+                          obscureText: _obscurePassword,
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) => _submit(),
+                          decoration: InputDecoration(
+                            labelText: '비밀번호',
+                            prefixIcon: const Icon(Icons.lock_outline_rounded),
+                            suffixIcon: IconButton(
+                              onPressed: () {
+                                setState(
+                                  () => _obscurePassword = !_obscurePassword,
+                                );
+                              },
+                              icon: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                            ),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.length < 6) {
+                              return '비밀번호는 6자 이상 입력해 주세요.';
+                            }
+                            return null;
+                          },
+                        ),
+                        if (!_isSignUp) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton(
+                                onPressed: _isLoading ? null : _showFindId,
+                                child: const Text('아이디 찾기'),
+                              ),
+                              const Text(
+                                '|',
+                                style: TextStyle(color: Color(0xFFD1D5DB)),
+                              ),
+                              TextButton(
+                                onPressed: _isLoading
+                                    ? null
+                                    : _showPasswordReset,
+                                child: const Text('비밀번호 재설정'),
+                              ),
+                            ],
                           ),
                         ],
-                      ),
-                    ],
-                    if (_errorMessage != null) ...[
-                      const SizedBox(height: 14),
-                      Text(
-                        _errorMessage!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Color(0xFFEF4444)),
-                      ),
-                    ],
-                    const SizedBox(height: 22),
-                    SizedBox(
-                      height: 54,
-                      child: FilledButton(
-                        onPressed: _isLoading ? null : _submit,
-                        child: _isLoading
-                            ? const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : Text(
-                                _isSignUp ? '회원가입' : '로그인',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                      ),
+                        if (_errorMessage != null) ...[
+                          const SizedBox(height: 14),
+                          Text(
+                            _errorMessage!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Color(0xFFEF4444)),
+                          ),
+                        ],
+                        const SizedBox(height: 22),
+                        SizedBox(
+                          height: 54,
+                          child: FilledButton(
+                            onPressed: _isLoading ? null : _submit,
+                            child: _isLoading
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : Text(
+                                    _isSignUp ? '회원가입' : '로그인',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextButton(
+                          onPressed: _isLoading
+                              ? null
+                              : () {
+                                  setState(() {
+                                    _isSignUp = !_isSignUp;
+                                    _errorMessage = null;
+                                  });
+                                },
+                          child: Text(
+                            _isSignUp ? '이미 계정이 있나요? 로그인' : '처음이신가요? 회원가입',
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 10),
-                    TextButton(
-                      onPressed: _isLoading
-                          ? null
-                          : () {
-                              setState(() {
-                                _isSignUp = !_isSignUp;
-                                _errorMessage = null;
-                              });
-                            },
-                      child: Text(
-                        _isSignUp ? '이미 계정이 있나요? 로그인' : '처음이신가요? 회원가입',
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -2249,95 +2465,137 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     ];
 
     return Scaffold(
-      body: Column(
-        children: [
-          if (_connectionError != null)
-            SafeArea(
-              bottom: false,
-              child: Container(
-                width: double.infinity,
-                margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFE4E6),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.cloud_off_rounded,
-                      color: Color(0xFFBE123C),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _connectionError!,
-                        style: const TextStyle(
-                          color: Color(0xFF9F1239),
-                          fontWeight: FontWeight.w600,
+      extendBody: true,
+      body: SoftPastelBackground(
+        child: Column(
+          children: [
+            if (_connectionError != null)
+              SafeArea(
+                bottom: false,
+                child: Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFE4E6),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.cloud_off_rounded,
+                        color: Color(0xFFBE123C),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _connectionError!,
+                          style: const TextStyle(
+                            color: Color(0xFF9F1239),
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: _connectFirestore,
-                      child: const Text('재시도'),
-                    ),
-                  ],
+                      TextButton(
+                        onPressed: _connectFirestore,
+                        child: const Text('재시도'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
+            Expanded(
+              child: IndexedStack(index: _currentIndex, children: pages),
             ),
-          Expanded(
-            child: IndexedStack(index: _currentIndex, children: pages),
-          ),
-        ],
+          ],
+        ),
       ),
       floatingActionButton: _currentIndex < 2
-          ? FloatingActionButton.extended(
-              onPressed: () {
-                if (_ledgerId.isEmpty) {
-                  _showMessage(
-                    _connectingFirestore
-                        ? 'Firebase에서 가계부를 불러오는 중입니다.'
-                        : 'Firebase가 연결되지 않았습니다. 다시 연결합니다.',
-                  );
-                  if (!_connectingFirestore) {
-                    _connectFirestore();
+          ? Container(
+              decoration: BoxDecoration(
+                gradient: appGradient,
+                borderRadius: BorderRadius.circular(99),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x45D95B90),
+                    blurRadius: 22,
+                    offset: Offset(0, 9),
+                  ),
+                ],
+              ),
+              child: FloatingActionButton.extended(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                focusElevation: 0,
+                highlightElevation: 0,
+                onPressed: () {
+                  if (_ledgerId.isEmpty) {
+                    _showMessage(
+                      _connectingFirestore
+                          ? 'Firebase에서 가계부를 불러오는 중입니다.'
+                          : 'Firebase가 연결되지 않았습니다. 다시 연결합니다.',
+                    );
+                    if (!_connectingFirestore) {
+                      _connectFirestore();
+                    }
+                    return;
                   }
-                  return;
-                }
-                _openAddTransaction();
-              },
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('내역 추가'),
+                  _openAddTransaction();
+                },
+                icon: const Icon(Icons.add_rounded),
+                label: const Text(
+                  '내역 추가',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
             )
           : null,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
-          setState(() => _currentIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: '홈',
+      bottomNavigationBar: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: AppColors.border),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x1FA64D72),
+                blurRadius: 26,
+                offset: Offset(0, 10),
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long_rounded),
-            label: '내역',
+          clipBehavior: Clip.antiAlias,
+          child: NavigationBar(
+            selectedIndex: _currentIndex,
+            onDestinationSelected: (index) {
+              setState(() => _currentIndex = index);
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home_rounded),
+                label: '홈',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.receipt_long_outlined),
+                selectedIcon: Icon(Icons.receipt_long_rounded),
+                label: '내역',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.bar_chart_outlined),
+                selectedIcon: Icon(Icons.bar_chart_rounded),
+                label: '통계',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.people_outline_rounded),
+                selectedIcon: Icon(Icons.people_rounded),
+                label: '함께쓰기',
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.bar_chart_outlined),
-            selectedIcon: Icon(Icons.bar_chart_rounded),
-            label: '통계',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.people_outline_rounded),
-            selectedIcon: Icon(Icons.people_rounded),
-            label: '함께쓰기',
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -2496,12 +2754,20 @@ class _HomeHeader extends StatelessWidget {
           width: 48,
           height: 48,
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(18),
+            gradient: appGradient,
+            borderRadius: BorderRadius.circular(17),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x2EE85D93),
+                blurRadius: 16,
+                offset: Offset(0, 6),
+              ),
+            ],
           ),
-          child: Icon(
-            Icons.savings_rounded,
-            color: Theme.of(context).colorScheme.primary,
+          child: const Icon(
+            Icons.favorite_rounded,
+            color: Colors.white,
+            size: 23,
           ),
         ),
         const SizedBox(width: 12),
@@ -2524,10 +2790,18 @@ class _HomeHeader extends StatelessWidget {
         Stack(
           clipBehavior: Clip.none,
           children: [
-            IconButton.filledTonal(
-              onPressed: onNotificationsPressed,
-              icon: const Icon(Icons.notifications_none_rounded),
-              tooltip: '자동등록 알림함',
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: IconButton(
+                onPressed: onNotificationsPressed,
+                color: AppColors.deepRose,
+                icon: const Icon(Icons.notifications_none_rounded),
+                tooltip: '자동등록 알림함',
+              ),
             ),
             if (pendingPaymentCount > 0)
               Positioned(
@@ -2580,14 +2854,14 @@ class _HomeInsightCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFEFF),
+        color: Color.lerp(Colors.white, color, 0.045),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFFFDDEA)),
-        boxShadow: const [
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+        boxShadow: [
           BoxShadow(
-            color: Color(0x0FE86A9D),
+            color: color.withValues(alpha: 0.08),
             blurRadius: 16,
-            offset: Offset(0, 7),
+            offset: const Offset(0, 7),
           ),
         ],
       ),
@@ -2647,12 +2921,9 @@ class _SummaryCard extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.all(22),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFF17AA8), Color(0xFFA786E8)],
-        ),
+        gradient: appGradient,
         borderRadius: BorderRadius.circular(28),
         boxShadow: const [
           BoxShadow(
@@ -2662,40 +2933,54 @@ class _SummaryCard extends StatelessWidget {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
-          Text(
-            '$month월 남은 금액',
-            style: const TextStyle(color: Color(0xFFFFEAF3), fontSize: 14),
+          const Positioned(
+            right: -32,
+            top: -42,
+            child: _PastelOrb(size: 130, color: Color(0x26FFFFFF)),
           ),
-          const SizedBox(height: 6),
-          Text(
-            '${formatWon(balance)}원',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 30,
-              fontWeight: FontWeight.w900,
-            ),
+          const Positioned(
+            right: 62,
+            bottom: -52,
+            child: _PastelOrb(size: 100, color: Color(0x15FFFFFF)),
           ),
-          const SizedBox(height: 24),
-          Row(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: _SummaryItem(
-                  label: '수입',
-                  amount: income,
-                  icon: Icons.south_west_rounded,
+              Text(
+                '$month월 남은 금액',
+                style: const TextStyle(color: Color(0xFFFFEAF3), fontSize: 14),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${formatWon(balance)}원',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
-              Container(width: 1, height: 36, color: Colors.white24),
-              const SizedBox(width: 18),
-              Expanded(
-                child: _SummaryItem(
-                  label: '지출',
-                  amount: expense,
-                  icon: Icons.north_east_rounded,
-                ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: _SummaryItem(
+                      label: '수입',
+                      amount: income,
+                      icon: Icons.south_west_rounded,
+                    ),
+                  ),
+                  Container(width: 1, height: 36, color: Colors.white24),
+                  const SizedBox(width: 18),
+                  Expanded(
+                    child: _SummaryItem(
+                      label: '지출',
+                      amount: expense,
+                      icon: Icons.north_east_rounded,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -2854,11 +3139,22 @@ class _TransactionsPageState extends State<TransactionsPage> {
                               padding: const EdgeInsets.fromLTRB(4, 0, 4, 9),
                               child: Row(
                                 children: [
-                                  Text(
-                                    formatDayHeader(day),
-                                    style: const TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w800,
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 11,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.blush,
+                                      borderRadius: BorderRadius.circular(99),
+                                    ),
+                                    child: Text(
+                                      formatDayHeader(day),
+                                      style: const TextStyle(
+                                        color: AppColors.deepRose,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w800,
+                                      ),
                                     ),
                                   ),
                                   const Spacer(),
@@ -2912,8 +3208,16 @@ class _MonthSelector extends StatelessWidget {
     return Container(
       height: 52,
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFEFF),
-        borderRadius: BorderRadius.circular(16),
+        color: Colors.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x10A64D72),
+            blurRadius: 14,
+            offset: Offset(0, 6),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -3015,7 +3319,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
                               label: '수입',
                               amount: income,
                               previousAmount: previousIncome,
-                              color: const Color(0xFF10B981),
+                              color: AppColors.mint,
                               icon: Icons.south_west_rounded,
                             ),
                           ),
@@ -3025,7 +3329,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
                               label: '지출',
                               amount: expense,
                               previousAmount: previousExpense,
-                              color: const Color(0xFFEF4444),
+                              color: AppColors.coral,
                               icon: Icons.north_east_rounded,
                             ),
                           ),
@@ -3041,7 +3345,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
                               (item) => item.type == TransactionType.expense,
                             )
                             .toList(),
-                        color: const Color(0xFFEF4444),
+                        color: AppColors.coral,
                       ),
                       const SizedBox(height: 14),
                       _CategoryStatistics(
@@ -3051,7 +3355,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
                               (item) => item.type == TransactionType.income,
                             )
                             .toList(),
-                        color: const Color(0xFF10B981),
+                        color: AppColors.mint,
                       ),
                     ],
                   ),
@@ -3084,8 +3388,16 @@ class _StatSummaryCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFEFF),
-        borderRadius: BorderRadius.circular(18),
+        color: Color.lerp(Colors.white, color, 0.04),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.16)),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.07),
+            blurRadius: 16,
+            offset: const Offset(0, 7),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3133,8 +3445,11 @@ class _BalanceCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(18),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFFE9F2), Color(0xFFF1EBFF)],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
       ),
       child: Row(
         children: [
@@ -3183,8 +3498,16 @@ class _CategoryStatistics extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFEFF),
-        borderRadius: BorderRadius.circular(20),
+        color: Colors.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppColors.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0FA64D72),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3270,12 +3593,16 @@ class TransactionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isExpense = transaction.type == TransactionType.expense;
-    final color = isExpense ? const Color(0xFFEF4444) : const Color(0xFF10B981);
+    final color = isExpense ? AppColors.coral : AppColors.mint;
     final icon = categoryIcon(transaction.category);
 
     return Card(
       clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      color: Color.lerp(Colors.white, color, 0.025),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: color.withValues(alpha: 0.13)),
+      ),
       child: InkWell(
         onTap: onTap,
         child: Padding(
@@ -3286,8 +3613,15 @@ class TransactionTile extends StatelessWidget {
                 width: 46,
                 height: 46,
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(14),
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      color.withValues(alpha: 0.16),
+                      color.withValues(alpha: 0.06),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(15),
                 ),
                 child: Icon(icon, color: color, size: 22),
               ),
@@ -3565,107 +3899,109 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
           const SizedBox(width: 8),
         ],
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SegmentedButton<TransactionType>(
-                segments: const [
-                  ButtonSegment(
-                    value: TransactionType.expense,
-                    label: Text('지출 분류'),
-                    icon: Icon(Icons.north_east_rounded),
-                  ),
-                  ButtonSegment(
-                    value: TransactionType.income,
-                    label: Text('수입 분류'),
-                    icon: Icon(Icons.south_west_rounded),
-                  ),
-                ],
-                selected: {_selectedType},
-                onSelectionChanged: (selection) {
-                  setState(() {
-                    _selectedType = selection.first;
-                    _controller.clear();
-                  });
-                },
-                showSelectedIcon: false,
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  IconButton.filledTonal(
-                    onPressed: () => _pickIcon(),
-                    icon: Icon(
-                      categoryIconChoices[_newCategoryIconKey] ??
-                          Icons.more_horiz_rounded,
+      body: SoftPastelBackground(
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SegmentedButton<TransactionType>(
+                  segments: const [
+                    ButtonSegment(
+                      value: TransactionType.expense,
+                      label: Text('지출 분류'),
+                      icon: Icon(Icons.north_east_rounded),
                     ),
-                    tooltip: '새 분류 아이콘 선택',
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      textInputAction: TextInputAction.done,
-                      onSubmitted: (_) => _addCategory(),
-                      decoration: const InputDecoration(
-                        hintText: '새 분류 이름',
-                        prefixIcon: Icon(Icons.add_rounded),
-                      ),
+                    ButtonSegment(
+                      value: TransactionType.income,
+                      label: Text('수입 분류'),
+                      icon: Icon(Icons.south_west_rounded),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    height: 56,
-                    child: FilledButton(
-                      onPressed: _addCategory,
-                      child: const Text('추가'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 22),
-              Text(
-                '${_selectedCategories.length}개 분류',
-                style: const TextStyle(
-                  color: Color(0xFF6B7280),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: ListView.separated(
-                  itemCount: _selectedCategories.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final category = _selectedCategories[index];
-                    return Card(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: ListTile(
-                        leading: IconButton.filledTonal(
-                          onPressed: () => _pickIcon(category: category),
-                          icon: Icon(categoryIcon(category, _icons)),
-                          tooltip: '아이콘 변경',
-                        ),
-                        title: Text(
-                          category,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        trailing: IconButton(
-                          onPressed: () => _removeCategory(category),
-                          icon: const Icon(Icons.delete_outline_rounded),
-                          tooltip: '삭제',
-                        ),
-                      ),
-                    );
+                  ],
+                  selected: {_selectedType},
+                  onSelectionChanged: (selection) {
+                    setState(() {
+                      _selectedType = selection.first;
+                      _controller.clear();
+                    });
                   },
+                  showSelectedIcon: false,
                 ),
-              ),
-            ],
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    IconButton.filledTonal(
+                      onPressed: () => _pickIcon(),
+                      icon: Icon(
+                        categoryIconChoices[_newCategoryIconKey] ??
+                            Icons.more_horiz_rounded,
+                      ),
+                      tooltip: '새 분류 아이콘 선택',
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _addCategory(),
+                        decoration: const InputDecoration(
+                          hintText: '새 분류 이름',
+                          prefixIcon: Icon(Icons.add_rounded),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      height: 56,
+                      child: FilledButton(
+                        onPressed: _addCategory,
+                        child: const Text('추가'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 22),
+                Text(
+                  '${_selectedCategories.length}개 분류',
+                  style: const TextStyle(
+                    color: Color(0xFF6B7280),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: _selectedCategories.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final category = _selectedCategories[index];
+                      return Card(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: ListTile(
+                          leading: IconButton.filledTonal(
+                            onPressed: () => _pickIcon(category: category),
+                            icon: Icon(categoryIcon(category, _icons)),
+                            tooltip: '아이콘 변경',
+                          ),
+                          title: Text(
+                            category,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          trailing: IconButton(
+                            onPressed: () => _removeCategory(category),
+                            icon: const Icon(Icons.delete_outline_rounded),
+                            tooltip: '삭제',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -3774,83 +4110,87 @@ class _TrashPageState extends State<TrashPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('휴지통')),
-      body: _items.isEmpty
-          ? const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.delete_sweep_outlined,
-                    size: 54,
-                    color: Color(0xFFB8A9B1),
-                  ),
-                  SizedBox(height: 12),
-                  Text('휴지통이 비어 있어요.'),
-                ],
+      body: SoftPastelBackground(
+        child: _items.isEmpty
+            ? const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.delete_sweep_outlined,
+                      size: 54,
+                      color: Color(0xFFB8A9B1),
+                    ),
+                    SizedBox(height: 12),
+                    Text('휴지통이 비어 있어요.'),
+                  ],
+                ),
+              )
+            : ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: _items.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final transaction = _items[index];
+                  final working = _workingIds.contains(transaction.id);
+                  return Card(
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        child: Icon(categoryIcon(transaction.category)),
+                      ),
+                      title: Text(
+                        transaction.title,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: Text(
+                        '${formatWon(transaction.amount)}원 · ${formatDate(transaction.date)}',
+                      ),
+                      trailing: working
+                          ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : PopupMenuButton<String>(
+                              onSelected: (value) {
+                                if (value == 'restore') {
+                                  _restore(transaction);
+                                } else {
+                                  _deletePermanently(transaction);
+                                }
+                              },
+                              itemBuilder: (context) => const [
+                                PopupMenuItem(
+                                  value: 'restore',
+                                  child: ListTile(
+                                    leading: Icon(Icons.restore_rounded),
+                                    title: Text('복원하기'),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: 'delete',
+                                  child: ListTile(
+                                    leading: Icon(
+                                      Icons.delete_forever_rounded,
+                                      color: Color(0xFFB42335),
+                                    ),
+                                    title: Text(
+                                      '완전히 삭제',
+                                      style: TextStyle(
+                                        color: Color(0xFFB42335),
+                                      ),
+                                    ),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  );
+                },
               ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: _items.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 10),
-              itemBuilder: (context, index) {
-                final transaction = _items[index];
-                final working = _workingIds.contains(transaction.id);
-                return Card(
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      child: Icon(categoryIcon(transaction.category)),
-                    ),
-                    title: Text(
-                      transaction.title,
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    subtitle: Text(
-                      '${formatWon(transaction.amount)}원 · ${formatDate(transaction.date)}',
-                    ),
-                    trailing: working
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : PopupMenuButton<String>(
-                            onSelected: (value) {
-                              if (value == 'restore') {
-                                _restore(transaction);
-                              } else {
-                                _deletePermanently(transaction);
-                              }
-                            },
-                            itemBuilder: (context) => const [
-                              PopupMenuItem(
-                                value: 'restore',
-                                child: ListTile(
-                                  leading: Icon(Icons.restore_rounded),
-                                  title: Text('복원하기'),
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: ListTile(
-                                  leading: Icon(
-                                    Icons.delete_forever_rounded,
-                                    color: Color(0xFFB42335),
-                                  ),
-                                  title: Text(
-                                    '완전히 삭제',
-                                    style: TextStyle(color: Color(0xFFB42335)),
-                                  ),
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                );
-              },
-            ),
+      ),
     );
   }
 }
@@ -4358,10 +4698,18 @@ class _TogetherPageState extends State<TogetherPage> {
                     ),
                   ),
                 ),
-                IconButton.filledTonal(
-                  onPressed: () => _confirmSignOut(context),
-                  icon: const Icon(Icons.logout_rounded),
-                  tooltip: '로그아웃',
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: IconButton(
+                    onPressed: () => _confirmSignOut(context),
+                    color: AppColors.deepRose,
+                    icon: const Icon(Icons.logout_rounded),
+                    tooltip: '로그아웃',
+                  ),
                 ),
               ],
             ),
@@ -4377,9 +4725,8 @@ class _TogetherPageState extends State<TogetherPage> {
                   child: Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(28),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(24),
+                    decoration: softCardDecoration(
+                      color: Colors.white.withValues(alpha: 0.94),
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -4447,10 +4794,15 @@ class _TogetherPageState extends State<TogetherPage> {
                           width: 76,
                           height: 76,
                           decoration: BoxDecoration(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.primaryContainer,
-                            shape: BoxShape.circle,
+                            gradient: appGradient,
+                            borderRadius: BorderRadius.circular(27),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x30E85D93),
+                                blurRadius: 22,
+                                offset: Offset(0, 9),
+                              ),
+                            ],
                           ),
                           child: Icon(
                             _isShared
@@ -4459,7 +4811,7 @@ class _TogetherPageState extends State<TogetherPage> {
                                 ? Icons.person_rounded
                                 : Icons.group_add_rounded,
                             size: 34,
-                            color: Theme.of(context).colorScheme.primary,
+                            color: Colors.white,
                           ),
                         ),
                         const SizedBox(height: 20),
@@ -4709,7 +5061,11 @@ class _PendingPaymentsSheetState extends State<PendingPaymentsSheet> {
     return Container(
       height: MediaQuery.sizeOf(context).height * 0.82,
       decoration: const BoxDecoration(
-        color: Color(0xFFFFFBFD),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFFFF7FB), Color(0xFFFFFEFF)],
+        ),
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       child: Column(
@@ -5023,7 +5379,11 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        color: Color(0xFFFFFBFD),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFFFF5FA), Color(0xFFFFFEFF)],
+        ),
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       child: Padding(
@@ -5050,16 +5410,50 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                Text(
-                  widget.initialDraft != null
-                      ? '자동 인식 내역 확인'
-                      : widget.initialTransaction == null
-                      ? '내역 추가'
-                      : '내역 수정',
-                  style: const TextStyle(
-                    fontSize: 23,
-                    fontWeight: FontWeight.w900,
-                  ),
+                Row(
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        gradient: appGradient,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Icon(
+                        widget.initialDraft != null
+                            ? Icons.auto_awesome_rounded
+                            : Icons.edit_note_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.initialDraft != null
+                                ? '자동 인식 내역 확인'
+                                : widget.initialTransaction == null
+                                ? '내역 추가'
+                                : '내역 수정',
+                            style: const TextStyle(
+                              fontSize: 23,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            '오늘의 기록을 차분히 남겨볼까요?',
+                            style: TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
                 if (widget.initialDraft != null) ...[
                   const SizedBox(height: 10),
@@ -5259,13 +5653,29 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                 SizedBox(
                   width: double.infinity,
                   height: 54,
-                  child: FilledButton(
-                    onPressed: _save,
-                    child: Text(
-                      widget.initialTransaction == null ? '저장하기' : '수정 완료',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: appGradient,
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x30E85D93),
+                          blurRadius: 18,
+                          offset: Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                      ),
+                      onPressed: _save,
+                      child: Text(
+                        widget.initialTransaction == null ? '저장하기' : '수정 완료',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ),
