@@ -110,6 +110,24 @@ class MainActivity : FlutterActivity() {
                     )
                 }
 
+                "getPendingPayments" -> {
+                    val preferences = getSharedPreferences(
+                        PaymentQueue.preferencesName,
+                        MODE_PRIVATE,
+                    )
+                    val queue = JSONArray(
+                        preferences.getString(PaymentQueue.pendingQueueKey, "[]"),
+                    )
+                    result.success(
+                        (0 until queue.length()).map { index ->
+                            mapOf(
+                                "rawMessage" to PaymentQueue.rawMessageAt(queue, index),
+                                "receivedAt" to PaymentQueue.receivedAtAt(queue, index),
+                            )
+                        },
+                    )
+                }
+
                 "getPendingPaymentCount" -> {
                     val preferences = getSharedPreferences(
                         PaymentQueue.preferencesName,
@@ -145,6 +163,39 @@ class MainActivity : FlutterActivity() {
                         PaymentQueue.showPendingNotification(
                             this,
                             nextBody,
+                            queue.length(),
+                        )
+                    }
+                    result.success(queue.length())
+                }
+
+
+                "removePendingPayments" -> {
+                    val rawMessages = call.argument<List<String>>("rawMessages").orEmpty().toSet()
+                    val preferences = getSharedPreferences(
+                        PaymentQueue.preferencesName,
+                        MODE_PRIVATE,
+                    )
+                    val queue = JSONArray(
+                        preferences.getString(PaymentQueue.pendingQueueKey, "[]"),
+                    )
+                    for (index in queue.length() - 1 downTo 0) {
+                        if (PaymentQueue.rawMessageAt(queue, index) in rawMessages) {
+                            queue.remove(index)
+                        }
+                    }
+                    preferences.edit()
+                        .putString(PaymentQueue.pendingQueueKey, queue.toString())
+                        .apply()
+
+                    if (queue.length() == 0) {
+                        getSystemService(NotificationManager::class.java)
+                            .cancel(PaymentQueue.notificationId)
+                    } else {
+                        val nextValue = PaymentQueue.rawMessageAt(queue, 0)
+                        PaymentQueue.showPendingNotification(
+                            this,
+                            nextValue.substringAfter("\n", nextValue),
                             queue.length(),
                         )
                     }

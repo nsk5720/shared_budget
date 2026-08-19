@@ -666,6 +666,7 @@ class BudgetTransaction {
     required this.type,
     required this.date,
     this.memo = '',
+    this.deletedAt,
   });
 
   final String id;
@@ -675,6 +676,7 @@ class BudgetTransaction {
   final TransactionType type;
   final DateTime date;
   final String memo;
+  final DateTime? deletedAt;
 
   Map<String, Object?> toFirestore(
     String userId, {
@@ -737,6 +739,16 @@ class PendingPayment {
 
   final String rawMessage;
   final DateTime receivedAt;
+
+  String get source => rawMessage.split('\n').first.trim();
+}
+
+class PendingPaymentsAction {
+  const PendingPaymentsAction.review(this.payment) : rawMessages = const [];
+  const PendingPaymentsAction.remove(this.rawMessages) : payment = null;
+
+  final PendingPayment? payment;
+  final List<String> rawMessages;
 }
 
 class _ParsedAmount {
@@ -1056,6 +1068,32 @@ class SmsPlatformService {
     return await _channel.invokeMethod<int>('getPendingPaymentCount') ?? 0;
   }
 
+  static Future<List<PendingPayment>> getPendingPayments() async {
+    final values = await _channel.invokeListMethod<dynamic>(
+      'getPendingPayments',
+    );
+    return (values ?? const [])
+        .map((value) {
+          final map = Map<Object?, Object?>.from(value as Map);
+          final receivedAtMillis = map['receivedAt'] as int?;
+          return PendingPayment(
+            rawMessage: map['rawMessage'] as String? ?? '',
+            receivedAt: receivedAtMillis == null || receivedAtMillis <= 0
+                ? DateTime.now()
+                : DateTime.fromMillisecondsSinceEpoch(receivedAtMillis),
+          );
+        })
+        .where((item) => item.rawMessage.trim().isNotEmpty)
+        .toList();
+  }
+
+  static Future<int> removePendingPayments(List<String> rawMessages) async {
+    return await _channel.invokeMethod<int>('removePendingPayments', {
+          'rawMessages': rawMessages,
+        }) ??
+        0;
+  }
+
   static Future<int> clearPendingSms() async {
     return await _channel.invokeMethod<int>('clearPendingSms') ?? 0;
   }
@@ -1085,6 +1123,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   _categorySubscription;
 
   final List<BudgetTransaction> _transactions = [];
+  final List<BudgetTransaction> _deletedTransactions = [];
   List<String> _expenseCategories = [...defaultExpenseCategories];
   List<String> _incomeCategories = [...defaultIncomeCategories];
   Map<String, String> _categoryIconKeys = {...defaultCategoryIconKeys};
@@ -1465,7 +1504,10 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         .collection('transactions')
         .get(const GetOptions(source: Source.server))
         .timeout(const Duration(seconds: 20));
-    if (source.docs.isEmpty) {
+    final sourceDocuments = source.docs
+        .where((document) => document.data()['deletedAt'] is! Timestamp)
+        .toList();
+    if (sourceDocuments.isEmpty) {
       return 0;
     }
 
@@ -1474,12 +1516,12 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         .doc(_ledgerId)
         .collection('transactions');
     const batchSize = 400;
-    for (var start = 0; start < source.docs.length; start += batchSize) {
-      final end = (start + batchSize < source.docs.length)
+    for (var start = 0; start < sourceDocuments.length; start += batchSize) {
+      final end = (start + batchSize < sourceDocuments.length)
           ? start + batchSize
-          : source.docs.length;
+          : sourceDocuments.length;
       final batch = database.batch();
-      for (final document in source.docs.sublist(start, end)) {
+      for (final document in sourceDocuments.sublist(start, end)) {
         final importedId = 'import_${widget.user.uid}_${document.id}';
         batch.set(target.doc(importedId), {
           ...document.data(),
@@ -1491,7 +1533,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       }
       await batch.commit().timeout(const Duration(seconds: 30));
     }
-    return source.docs.length;
+    return sourceDocuments.length;
   }
 
   void _activateLedger(DocumentSnapshot<Map<String, dynamic>> ledgerDocument) {
@@ -1522,6 +1564,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         _ledgerMemberEmails = memberEmails;
         _loadingTransactions = true;
         _transactions.clear();
+        _deletedTransactions.clear();
       });
     }
 
@@ -1582,6 +1625,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
             final transactions = snapshot.docs.map((document) {
               final transactionData = document.data();
               final timestamp = transactionData['date'];
+              final deletedTimestamp = transactionData['deletedAt'];
               return BudgetTransaction(
                 id: document.id,
                 title: transactionData['title'] as String? ?? '이름 없음',
@@ -1594,6 +1638,9 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
                     ? timestamp.toDate()
                     : DateTime.now(),
                 memo: transactionData['memo'] as String? ?? '',
+                deletedAt: deletedTimestamp is Timestamp
+                    ? deletedTimestamp.toDate()
+                    : null,
               );
             }).toList();
 
@@ -1601,7 +1648,14 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
               setState(() {
                 _transactions
                   ..clear()
-                  ..addAll(transactions);
+                  ..addAll(
+                    transactions.where((item) => item.deletedAt == null),
+                  );
+                _deletedTransactions
+                  ..clear()
+                  ..addAll(
+                    transactions.where((item) => item.deletedAt != null),
+                  );
                 _loadingTransactions = false;
                 _connectionError = null;
               });
@@ -1640,13 +1694,37 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   }
 
   Future<void> _openPendingPayments() async {
-    await _refreshPendingPaymentCount();
+    List<PendingPayment> pendingPayments;
+    try {
+      pendingPayments = await SmsPlatformService.getPendingPayments();
+    } on PlatformException {
+      pendingPayments = const [];
+    }
     if (!mounted) {
       return;
     }
-    if (_pendingPaymentCount > 0) {
-      _lastPresentedSms = null;
-      await _checkPendingSms();
+    if (pendingPayments.isNotEmpty) {
+      final action = await showModalBottomSheet<PendingPaymentsAction>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => PendingPaymentsSheet(payments: pendingPayments),
+      );
+      if (action == null || !mounted) {
+        return;
+      }
+      if (action.rawMessages.isNotEmpty) {
+        final remaining = await SmsPlatformService.removePendingPayments(
+          action.rawMessages,
+        );
+        if (mounted) {
+          setState(() => _pendingPaymentCount = remaining);
+          _showMessage('${action.rawMessages.length}건을 알림함에서 제외했습니다.');
+        }
+      } else if (action.payment != null) {
+        await _reviewPendingPayment(action.payment!);
+      }
       return;
     }
 
@@ -1674,6 +1752,38 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     );
     if (openSettings == true) {
       await SmsPlatformService.openNotificationAccessSettings();
+    }
+  }
+
+  Future<void> _reviewPendingPayment(PendingPayment pendingPayment) async {
+    var draft = SmsTransactionParser.parse(
+      pendingPayment.rawMessage,
+      receivedAt: pendingPayment.receivedAt,
+    );
+    if (draft == null) {
+      await SmsPlatformService.removePendingPayments([
+        pendingPayment.rawMessage,
+      ]);
+      await _refreshPendingPaymentCount();
+      if (mounted) {
+        _showMessage('결제 금액을 찾지 못해 알림함에서 제외했습니다.');
+      }
+      return;
+    }
+    draft = _applyLearnedCategory(draft);
+    final outcome = await _openAddTransaction(draft: draft);
+    if (outcome == AddTransactionOutcome.saved ||
+        outcome == AddTransactionOutcome.discarded) {
+      final remaining = await SmsPlatformService.removePendingPayments([
+        pendingPayment.rawMessage,
+      ]);
+      if (mounted) {
+        setState(() => _pendingPaymentCount = remaining);
+        if (outcome == AddTransactionOutcome.discarded) {
+          _showMessage('잘못 인식된 알림을 대기 목록에서 제외했습니다.');
+        }
+      }
+      _lastPresentedSms = null;
     }
   }
 
@@ -1970,7 +2080,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         title: const Text('내역을 삭제할까요?'),
         content: Text(
           '${transaction.title} · ${formatWon(transaction.amount)}원\n'
-          '삭제한 내역은 되돌릴 수 없습니다.',
+          '삭제한 내역은 휴지통에서 다시 복원할 수 있습니다.',
         ),
         actions: [
           TextButton(
@@ -1997,10 +2107,14 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
           .doc(_ledgerId)
           .collection('transactions')
           .doc(transaction.id)
-          .delete()
+          .update({
+            'deletedAt': FieldValue.serverTimestamp(),
+            'deletedBy': widget.user.uid,
+            'updatedAt': FieldValue.serverTimestamp(),
+          })
           .timeout(const Duration(seconds: 15));
       if (mounted) {
-        _showMessage('내역을 삭제했습니다.');
+        _showMessage('내역을 휴지통으로 옮겼습니다.');
       }
     } on FirebaseException catch (error) {
       if (mounted) {
@@ -2011,6 +2125,59 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         _showMessage('삭제 시간이 초과되었습니다. 인터넷 연결을 확인해 주세요.');
       }
     }
+  }
+
+  Future<void> _restoreTransaction(BudgetTransaction transaction) async {
+    await FirebaseFirestore.instance
+        .collection('ledgers')
+        .doc(_ledgerId)
+        .collection('transactions')
+        .doc(transaction.id)
+        .update({
+          'deletedAt': FieldValue.delete(),
+          'deletedBy': FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        })
+        .timeout(const Duration(seconds: 15));
+    if (mounted) {
+      _showMessage('내역을 복원했습니다.');
+    }
+  }
+
+  Future<void> _deleteTransactionPermanently(
+    BudgetTransaction transaction,
+  ) async {
+    await FirebaseFirestore.instance
+        .collection('ledgers')
+        .doc(_ledgerId)
+        .collection('transactions')
+        .doc(transaction.id)
+        .delete()
+        .timeout(const Duration(seconds: 15));
+    if (mounted) {
+      _showMessage('내역을 완전히 삭제했습니다.');
+    }
+  }
+
+  Future<void> _openTrash() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => TrashPage(
+          transactions: _deletedTransactions,
+          onRestore: _restoreTransaction,
+          onDeletePermanently: _deleteTransactionPermanently,
+        ),
+      ),
+    );
+  }
+
+  void _copyCsvBackup() {
+    if (_transactions.isEmpty) {
+      _showMessage('백업할 내역이 없습니다.');
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: transactionsToCsv(_transactions)));
+    _showMessage('엑셀용 CSV 내역을 복사했습니다.');
   }
 
   Future<void> _saveCategories({
@@ -2070,6 +2237,8 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       TogetherPage(
         user: widget.user,
         onManageCategories: _openCategoryManager,
+        onOpenTrash: _openTrash,
+        onCopyCsvBackup: _copyCsvBackup,
         availableLedgers: _availableLedgers,
         onSelectLedger: _switchLedger,
         onImportPersonalTransactions: _importPersonalTransactions,
@@ -3504,11 +3673,195 @@ class _CategoryManagerPageState extends State<CategoryManagerPage> {
   }
 }
 
+class TrashPage extends StatefulWidget {
+  const TrashPage({
+    super.key,
+    required this.transactions,
+    required this.onRestore,
+    required this.onDeletePermanently,
+  });
+
+  final List<BudgetTransaction> transactions;
+  final Future<void> Function(BudgetTransaction) onRestore;
+  final Future<void> Function(BudgetTransaction) onDeletePermanently;
+
+  @override
+  State<TrashPage> createState() => _TrashPageState();
+}
+
+class _TrashPageState extends State<TrashPage> {
+  late final List<BudgetTransaction> _items;
+  final Set<String> _workingIds = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _items = [...widget.transactions]
+      ..sort(
+        (first, second) => (second.deletedAt ?? second.date).compareTo(
+          first.deletedAt ?? first.date,
+        ),
+      );
+  }
+
+  Future<void> _restore(BudgetTransaction transaction) async {
+    setState(() => _workingIds.add(transaction.id));
+    try {
+      await widget.onRestore(transaction);
+      if (mounted) {
+        setState(() => _items.removeWhere((item) => item.id == transaction.id));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('복원하지 못했습니다. 인터넷 연결을 확인해 주세요.')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _workingIds.remove(transaction.id));
+      }
+    }
+  }
+
+  Future<void> _deletePermanently(BudgetTransaction transaction) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('완전히 삭제할까요?'),
+        content: Text(
+          '${transaction.title} · ${formatWon(transaction.amount)}원\n'
+          '완전히 삭제하면 다시 복원할 수 없습니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFB42335),
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('완전 삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    setState(() => _workingIds.add(transaction.id));
+    try {
+      await widget.onDeletePermanently(transaction);
+      if (mounted) {
+        setState(() => _items.removeWhere((item) => item.id == transaction.id));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('완전히 삭제하지 못했습니다. 다시 시도해 주세요.')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _workingIds.remove(transaction.id));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('휴지통')),
+      body: _items.isEmpty
+          ? const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.delete_sweep_outlined,
+                    size: 54,
+                    color: Color(0xFFB8A9B1),
+                  ),
+                  SizedBox(height: 12),
+                  Text('휴지통이 비어 있어요.'),
+                ],
+              ),
+            )
+          : ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: _items.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final transaction = _items[index];
+                final working = _workingIds.contains(transaction.id);
+                return Card(
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      child: Icon(categoryIcon(transaction.category)),
+                    ),
+                    title: Text(
+                      transaction.title,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    subtitle: Text(
+                      '${formatWon(transaction.amount)}원 · ${formatDate(transaction.date)}',
+                    ),
+                    trailing: working
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'restore') {
+                                _restore(transaction);
+                              } else {
+                                _deletePermanently(transaction);
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'restore',
+                                child: ListTile(
+                                  leading: Icon(Icons.restore_rounded),
+                                  title: Text('복원하기'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: ListTile(
+                                  leading: Icon(
+                                    Icons.delete_forever_rounded,
+                                    color: Color(0xFFB42335),
+                                  ),
+                                  title: Text(
+                                    '완전히 삭제',
+                                    style: TextStyle(color: Color(0xFFB42335)),
+                                  ),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
 class TogetherPage extends StatefulWidget {
   const TogetherPage({
     super.key,
     required this.user,
     required this.onManageCategories,
+    required this.onOpenTrash,
+    required this.onCopyCsvBackup,
     required this.availableLedgers,
     required this.onSelectLedger,
     required this.onImportPersonalTransactions,
@@ -3519,6 +3872,8 @@ class TogetherPage extends StatefulWidget {
 
   final User user;
   final VoidCallback onManageCategories;
+  final VoidCallback onOpenTrash;
+  final VoidCallback onCopyCsvBackup;
   final List<LedgerOption> availableLedgers;
   final ValueChanged<String> onSelectLedger;
   final Future<int> Function() onImportPersonalTransactions;
@@ -4213,10 +4568,29 @@ class _TogetherPageState extends State<TogetherPage> {
                           alignment: Alignment.centerLeft,
                           child: _buildSentInvitations(context),
                         ),
-                        OutlinedButton.icon(
-                          onPressed: widget.onManageCategories,
-                          icon: const Icon(Icons.category_outlined),
-                          label: const Text('분류 관리'),
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              onPressed: widget.onManageCategories,
+                              icon: const Icon(Icons.category_outlined),
+                              label: const Text('분류 관리'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: widget.onOpenTrash,
+                              icon: const Icon(
+                                Icons.restore_from_trash_rounded,
+                              ),
+                              label: const Text('휴지통'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: widget.onCopyCsvBackup,
+                              icon: const Icon(Icons.table_view_rounded),
+                              label: const Text('CSV 백업 복사'),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 14),
                         Container(
@@ -4293,6 +4667,197 @@ class _TogetherNotice extends StatelessWidget {
           Icon(icon, size: 20, color: const Color(0xFFB91C1C)),
           const SizedBox(width: 8),
           Expanded(child: Text(text)),
+        ],
+      ),
+    );
+  }
+}
+
+class PendingPaymentsSheet extends StatefulWidget {
+  const PendingPaymentsSheet({super.key, required this.payments});
+
+  final List<PendingPayment> payments;
+
+  @override
+  State<PendingPaymentsSheet> createState() => _PendingPaymentsSheetState();
+}
+
+class _PendingPaymentsSheetState extends State<PendingPaymentsSheet> {
+  final Set<int> _selectedIndexes = {};
+
+  void _toggleAll() {
+    setState(() {
+      if (_selectedIndexes.length == widget.payments.length) {
+        _selectedIndexes.clear();
+      } else {
+        _selectedIndexes
+          ..clear()
+          ..addAll(List.generate(widget.payments.length, (index) => index));
+      }
+    });
+  }
+
+  void _removeSelected() {
+    final rawMessages = _selectedIndexes
+        .map((index) => widget.payments[index].rawMessage)
+        .toList();
+    Navigator.of(context).pop(PendingPaymentsAction.remove(rawMessages));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.sizeOf(context).height * 0.82,
+      decoration: const BoxDecoration(
+        color: Color(0xFFFFFBFD),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 12),
+          Container(
+            width: 42,
+            height: 5,
+            decoration: BoxDecoration(
+              color: const Color(0xFFD1D5DB),
+              borderRadius: BorderRadius.circular(99),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '자동등록 알림함',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        '저장 대기 ${widget.payments.length}건 · 누르면 내용을 확인해요',
+                        style: const TextStyle(color: Color(0xFF6B7280)),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  onPressed: _toggleAll,
+                  child: Text(
+                    _selectedIndexes.length == widget.payments.length
+                        ? '선택 해제'
+                        : '전체 선택',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+              itemCount: widget.payments.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final payment = widget.payments[index];
+                final draft = SmsTransactionParser.parse(
+                  payment.rawMessage,
+                  receivedAt: payment.receivedAt,
+                );
+                final selected = _selectedIndexes.contains(index);
+                return Material(
+                  color: selected ? const Color(0xFFFFE4EF) : Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pop(PendingPaymentsAction.review(payment)),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 14, 8),
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: selected,
+                            onChanged: (_) {
+                              setState(() {
+                                selected
+                                    ? _selectedIndexes.remove(index)
+                                    : _selectedIndexes.add(index);
+                              });
+                            },
+                          ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        draft?.title ?? '인식할 수 없는 알림',
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    ),
+                                    if (draft != null)
+                                      Text(
+                                        '${formatWon(draft.amount)}원',
+                                        style: const TextStyle(
+                                          color: Color(0xFFCE4F83),
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                const SizedBox(height: 5),
+                                Text(
+                                  '${payment.source} · '
+                                  '${formatFullDate(draft?.date ?? payment.receivedAt)}',
+                                  style: const TextStyle(
+                                    color: Color(0xFF6B7280),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.chevron_right_rounded),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          if (_selectedIndexes.isNotEmpty)
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFB42335),
+                    ),
+                    onPressed: _removeSelected,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: Text('${_selectedIndexes.length}건 알림함에서 제외'),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -4735,6 +5300,35 @@ DateTime previousMonth(DateTime month) {
 
 DateTime nextMonth(DateTime month) {
   return DateTime(month.year, month.month + 1);
+}
+
+String transactionsToCsv(List<BudgetTransaction> transactions) {
+  final sorted = [...transactions]
+    ..sort((first, second) => second.date.compareTo(first.date));
+  final rows = <List<String>>[
+    ['날짜', '구분', '분류', '사용처', '금액', '메모'],
+    ...sorted.map(
+      (item) => [
+        '${item.date.year.toString().padLeft(4, '0')}-'
+            '${item.date.month.toString().padLeft(2, '0')}-'
+            '${item.date.day.toString().padLeft(2, '0')}',
+        item.type == TransactionType.income ? '수입' : '지출',
+        item.category,
+        item.title,
+        item.amount.toString(),
+        item.memo,
+      ],
+    ),
+  ];
+  return rows.map((row) => row.map(_csvCell).join(',')).join('\r\n');
+}
+
+String _csvCell(String value) {
+  var safeValue = value;
+  if (RegExp(r'^[=+\-@\t\r]').hasMatch(safeValue)) {
+    safeValue = "'$safeValue";
+  }
+  return '"${safeValue.replaceAll('"', '""')}"';
 }
 
 int totalForType(List<BudgetTransaction> transactions, TransactionType type) {

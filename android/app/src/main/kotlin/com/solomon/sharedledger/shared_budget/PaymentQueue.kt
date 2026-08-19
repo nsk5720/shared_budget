@@ -17,8 +17,6 @@ object PaymentQueue {
     const val notificationChannelId = "payment_sms"
     const val notificationId = 2107
     const val openPaymentExtra = "open_pending_sms"
-    private const val lastAmountKey = "last_payment_amount"
-    private const val lastQueuedAtKey = "last_payment_queued_at"
     private const val rawMessageKey = "rawMessage"
     private const val receivedAtKey = "receivedAt"
     val amountPattern = Regex(
@@ -40,21 +38,16 @@ object PaymentQueue {
         val preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
         val queue = JSONArray(preferences.getString(pendingQueueKey, "[]"))
 
-        // 같은 알림이 갱신되어 여러 번 전달되는 경우 중복으로 쌓지 않습니다.
+        // 같은 알림이 몇 초 안에 갱신된 경우만 중복으로 처리합니다.
+        // 내용이 같아도 시간이 지난 실제 재결제는 새 내역으로 보존합니다.
         for (index in 0 until queue.length()) {
-            if (rawMessageAt(queue, index) == value) {
+            val queuedAt = receivedAtAt(queue, index)
+            if (rawMessageAt(queue, index) == value &&
+                queuedAt > 0L &&
+                kotlin.math.abs(receivedAt - queuedAt) < 10_000L
+            ) {
                 return
             }
-        }
-
-        // 같은 결제가 SMS와 Push로 거의 동시에 도착하면 한 건만 남깁니다.
-        val amount = amountPattern.find(body)?.value?.filter { it.isDigit() }.orEmpty()
-        val now = System.currentTimeMillis()
-        val recentlyQueuedSameAmount = amount.isNotEmpty() &&
-            preferences.getString(lastAmountKey, null) == amount &&
-            now - preferences.getLong(lastQueuedAtKey, 0L) < 30_000L
-        if (recentlyQueuedSameAmount) {
-            return
         }
 
         queue.put(
@@ -64,8 +57,6 @@ object PaymentQueue {
         )
         preferences.edit()
             .putString(pendingQueueKey, queue.toString())
-            .putString(lastAmountKey, amount)
-            .putLong(lastQueuedAtKey, now)
             .apply()
         showPendingNotification(context, body, queue.length())
     }

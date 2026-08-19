@@ -17,15 +17,22 @@
 - 월별 수입·지출 분류 통계
 - 전월 대비 증감률
 - 사용자 분류 추가·삭제 및 Firebase 저장
-- Android 결제 문자 수신
+- 초대·승인 및 공동 가계부 실시간 동기화
+- 개인·공동 가계부 전환
+- 기존 개인 내역을 공동 가계부로 가져오기
+- Android 결제 문자와 은행·카드 Push 수신
 - 앱이 닫혀 있어도 결제 확인 알림 표시
 - 알림을 눌러 거래 확인 화면 열기
 - 여러 결제 문자를 순서대로 대기
+- 자동등록 알림함 전체 목록 및 여러 건 제외
 - 미저장 문자 개수를 알림에 표시
-- 날짜·사용처·금액 자동 분석
+- 날짜·사용처·금액·분류 자동 분석
+- 알림에 날짜가 없을 때 실제 수신 시각 사용
 - 저장하기 전까지 알림과 거래 초안 유지
 - 분석 결과 확인 후 저장
-- 함께쓰기 안내 화면
+- 같은 사용처의 수정 결과를 무료로 학습
+- 삭제 내역 휴지통 보관·복원·완전 삭제
+- 엑셀용 CSV 백업 복사
 
 ## 실행
 
@@ -33,7 +40,8 @@
 flutter run
 ```
 
-다음 개발 단계는 초대·승인과 공동 가계부 동기화입니다.
+Android 네이티브 코드를 수정한 뒤에는 Hot Reload가 아니라 앱을 완전히
+중지하고 다시 실행해야 합니다.
 
 ## 가상 문자 테스트
 
@@ -53,3 +61,32 @@ Android Emulator의 `Extended controls > Phone`에서 아래 형식의 SMS를
 가계부에 `사용처 -> 분류` 규칙을 기억합니다. 다음에 같은 사용처가
 나오면 기억한 분류를 자동으로 적용합니다. Firebase Spark 요금제로
 사용할 수 있으며 Cloud Functions·OpenAI API·API 키가 필요하지 않습니다.
+
+## Firestore 규칙 배포
+
+거래 데이터 형식 검증과 휴지통 기능을 사용하려면 규칙을 배포합니다.
+
+```powershell
+firebase deploy --project shared-budget-46538 --only firestore:rules
+```
+
+## 개인 Release 서명
+
+현재는 `android/key.properties`가 없으면 테스트용 개발 키로 APK를
+만듭니다. 계속 업데이트해서 개인 휴대폰에서 사용하려면 한 번만 개인
+서명키를 만드세요.
+
+```powershell
+keytool -genkeypair -v -keystore android/app/shared-budget-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias shared-budget
+Copy-Item android/key.properties.example android/key.properties
+```
+
+그다음 `android/key.properties`의 비밀번호를 실제 값으로 바꾸고 빌드합니다.
+
+```powershell
+flutter build apk --release
+```
+
+`key.properties`와 `.jks` 파일은 Git에서 제외됩니다. 특히 `.jks` 파일을
+잃어버리면 같은 앱으로 업데이트할 수 없으므로 별도 안전한 장소에
+백업해야 합니다.

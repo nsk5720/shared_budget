@@ -18,6 +18,63 @@ service cloud.firestore {
           || request.auth.uid == invitation.receiverId);
     }
 
+    function isValidTransaction(transaction) {
+      return transaction.keys().hasAll([
+          'title',
+          'category',
+          'amount',
+          'type',
+          'date',
+          'memo',
+          'createdBy',
+          'createdAt',
+          'updatedAt'
+        ])
+        && transaction.keys().hasOnly([
+          'title',
+          'category',
+          'amount',
+          'type',
+          'date',
+          'memo',
+          'createdBy',
+          'createdAt',
+          'updatedAt',
+          'deletedAt',
+          'deletedBy',
+          'importedFromLedgerId',
+          'importedFromTransactionId',
+          'importedBy',
+          'importedAt'
+        ])
+        && transaction.title is string
+        && transaction.title.size() > 0
+        && transaction.title.size() <= 100
+        && transaction.category is string
+        && transaction.category.size() > 0
+        && transaction.category.size() <= 40
+        && transaction.amount is int
+        && transaction.amount > 0
+        && transaction.amount <= 999999999999
+        && transaction.type in ['expense', 'income']
+        && transaction.date is timestamp
+        && transaction.memo is string
+        && transaction.memo.size() <= 5000
+        && transaction.createdBy is string
+        && (!transaction.keys().hasAny(['deletedAt'])
+          || transaction.deletedAt is timestamp)
+        && (!transaction.keys().hasAny(['deletedBy'])
+          || transaction.deletedBy is string)
+        && (!transaction.keys().hasAny(['importedFromLedgerId'])
+          || transaction.importedFromLedgerId is string)
+        && (!transaction.keys().hasAny(['importedFromTransactionId'])
+          || transaction.importedFromTransactionId is string)
+        && (!transaction.keys().hasAny(['importedBy'])
+          || transaction.importedBy is string)
+        && (!transaction.keys().hasAny(['importedAt'])
+          || transaction.importedAt is timestamp);
+    }
+
     function isValidPersonalLedger(ledgerId) {
       return ledgerId == 'personal_' + request.auth.uid
         && request.resource.data.createdBy == request.auth.uid
@@ -100,7 +157,9 @@ service cloud.firestore {
       allow delete: if false;
 
       match /transactions/{transactionId} {
-        allow read, create, update, delete: if isLedgerMember(ledgerId);
+        allow read, delete: if isLedgerMember(ledgerId);
+        allow create, update: if isLedgerMember(ledgerId)
+          && isValidTransaction(request.resource.data);
       }
     }
   }

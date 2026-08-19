@@ -282,4 +282,22 @@ void main() {
     expect(personal.isShared, isFalse);
     expect(shared.isShared, isTrue);
   });
+
+  test('가계부 내역을 안전한 CSV로 만든다', () {
+    final csv = transactionsToCsv([
+      BudgetTransaction(
+        id: 'one',
+        title: '=위험한 수식',
+        category: '쇼핑',
+        amount: 12000,
+        type: TransactionType.expense,
+        date: DateTime(2026, 8, 19),
+        memo: '쿠폰 "사용"',
+      ),
+    ]);
+
+    expect(csv, contains('"날짜","구분","분류","사용처","금액","메모"'));
+    expect(csv, contains('"\'=위험한 수식"'));
+    expect(csv, contains('"쿠폰 ""사용"""'));
+  });
 }
