@@ -439,7 +439,7 @@ class MainActivity : FlutterActivity() {
         }
         val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt.Builder(this)
-            .setTitle("가계부 잠금 해제")
+            .setTitle("모아봄 잠금 해제")
             .setSubtitle("등록된 지문 또는 얼굴로 확인해 주세요")
             .setNegativeButton("PIN 사용", executor) { _, _ -> finish(false) }
             .build()

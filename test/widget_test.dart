@@ -28,7 +28,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('회원가입'), findsOneWidget);
-    expect(find.text('우리 가계부 시작하기'), findsOneWidget);
+    expect(find.text('모아봄 시작하기'), findsOneWidget);
   });
 
   test('금액에 천 단위 쉼표를 넣는다', () {

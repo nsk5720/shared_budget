@@ -433,7 +433,7 @@ class _SharedBudgetAppState extends State<SharedBudgetApp> {
 
         return MaterialApp(
           debugShowCheckedModeBanner: false,
-          title: '우리 가계부',
+          title: '모아봄',
           theme: ThemeData(
             useMaterial3: true,
             colorScheme: colorScheme,
@@ -846,7 +846,7 @@ class _LoginPageState extends State<LoginPage> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('아이디 찾기'),
         content: Text(
-          '우리 가계부의 아이디는 회원가입할 때 사용한 이메일 주소입니다.\n\n'
+          '모아봄의 아이디는 회원가입할 때 사용한 이메일 주소입니다.\n\n'
           '${hasValidEmail ? '현재 입력한 이메일: $enteredEmail\n\n' : ''}'
           '휴대폰의 설정 → 계정 및 백업 → 계정 관리에서 본인이 사용하는 '
           'Google 이메일을 확인해 보세요. 개인정보 보호를 위해 이름이나 '
@@ -1033,7 +1033,7 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         const SizedBox(height: 14),
                         Text(
-                          _isSignUp ? '우리 가계부 시작하기' : '다시 만나서 반가워요',
+                          _isSignUp ? '모아봄 시작하기' : '다시 만나서 반가워요',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                             fontSize: 26,
@@ -1997,7 +1997,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
           title: const Text('결제 문자·Push 자동등록 안내'),
           content: const SingleChildScrollView(
             child: Text(
-              '우리 가계부는 새로 수신되는 결제 SMS 문자와 은행·카드 앱이 '
+              '모아봄은 새로 수신되는 결제 SMS 문자와 은행·카드 앱이 '
               '표시하는 결제 Push 알림을 감지합니다. 기존 문자함 전체는 '
               '읽지 않습니다.\n\n'
               '문자 수신 권한은 새 결제 문자를 자동 입력하는 데 사용합니다. '
@@ -2041,7 +2041,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         builder: (dialogContext) => AlertDialog(
           title: const Text('결제 Push 알림 연결'),
           content: const Text(
-            '다음 화면에서 ‘우리 가계부 결제 알림 읽기’를 찾아 켜 주세요. '
+            '다음 화면에서 ‘모아봄 결제 알림 읽기’를 찾아 켜 주세요. '
             '그래야 은행·카드 앱의 결제 알림을 자동으로 가져올 수 있습니다.',
             style: TextStyle(height: 1.5),
           ),
@@ -2199,7 +2199,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       batch.set(database.collection('users').doc(user.uid), {
         'email': user.email,
         'inviteCode': inviteCode,
-        'appBuild': '3.0.0+17',
+        'appBuild': '3.0.1+18',
         'lastLoginAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       batch.set(
@@ -2370,7 +2370,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     if (_ledgerId == ledgerDocument.id) {
       if (mounted) {
         setState(() {
-          _ledgerName = data['name'] as String? ?? '우리 가계부';
+          _ledgerName = data['name'] as String? ?? '모아봄';
           _ledgerMemberEmails = memberEmails;
           _ledgerMemberIds = memberIds;
           _ledgerColorKey = data['colorKey'] as String? ?? 'pink';
@@ -2385,7 +2385,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
     if (mounted) {
       setState(() {
-        _ledgerName = data['name'] as String? ?? '우리 가계부';
+        _ledgerName = data['name'] as String? ?? '모아봄';
         _ledgerMemberEmails = memberEmails;
         _ledgerMemberIds = memberIds;
         _ledgerColorKey = data['colorKey'] as String? ?? 'pink';
@@ -2446,7 +2446,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
               .whereType<RecurringTransactionRule>()
               .toList();
       setState(() {
-        _ledgerName = ledgerData['name'] as String? ?? '우리 가계부';
+        _ledgerName = ledgerData['name'] as String? ?? '모아봄';
         _ledgerMemberEmails = emails;
         _ledgerMemberIds = memberIds;
         _ledgerColorKey = ledgerData['colorKey'] as String? ?? 'pink';
@@ -3226,7 +3226,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     try {
       final now = DateTime.now();
       final saved = await AppSettingsService.exportCsv(
-        '우리가계부_${now.year}${now.month.toString().padLeft(2, '0')}'
+        '모아봄_${now.year}${now.month.toString().padLeft(2, '0')}'
         '${now.day.toString().padLeft(2, '0')}.csv',
         transactionsToCsv(_transactions),
       );
@@ -3259,7 +3259,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       return;
     }
     final saved = await AppSettingsService.exportCsv(
-      '가계부_${range.start.year}${range.start.month.toString().padLeft(2, '0')}'
+      '모아봄_${range.start.year}${range.start.month.toString().padLeft(2, '0')}'
       '_${range.end.year}${range.end.month.toString().padLeft(2, '0')}.csv',
       transactionsToCsv(selected),
     );
@@ -3300,7 +3300,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     });
     final now = DateTime.now();
     final saved = await AppSettingsService.exportCsv(
-      '가계부_전체백업_${now.year}${now.month.toString().padLeft(2, '0')}'
+      '모아봄_전체백업_${now.year}${now.month.toString().padLeft(2, '0')}'
       '${now.day.toString().padLeft(2, '0')}.json',
       content,
       mimeType: 'application/json',
@@ -3314,7 +3314,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       if (content == null || content.trim().isEmpty || !mounted) return;
       final decoded = jsonDecode(content);
       if (decoded is! Map || decoded['format'] != 'shared-budget-backup') {
-        throw const FormatException('우리 가계부 전체 백업 파일이 아닙니다.');
+        throw const FormatException('모아봄 전체 백업 파일이 아닙니다.');
       }
       final ledger = Map<String, dynamic>.from(decoded['ledger'] as Map? ?? {});
       final rawTransactions = (decoded['transactions'] as List? ?? const []);
@@ -3945,7 +3945,7 @@ class _HomeHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                '우리 가계부',
+                '모아봄',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 2),
@@ -6930,7 +6930,7 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
               icon: Icons.widgets_outlined,
               children: const [
                 Text(
-                  '휴대폰 홈 화면을 길게 누른 뒤 위젯 → 우리 가계부를 선택하면 이번 달 지출과 남은 예산을 볼 수 있어요.',
+                  '휴대폰 홈 화면을 길게 누른 뒤 위젯 → 모아봄을 선택하면 이번 달 지출과 남은 예산을 볼 수 있어요.',
                   style: TextStyle(color: AppColors.muted, height: 1.45),
                 ),
               ],

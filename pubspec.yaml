@@ -1,5 +1,5 @@
 name: shared_budget
-description: "초대와 승인을 통해 함께 사용하는 가계부 앱."
+description: "초대와 승인을 통해 함께 사용하는 모아봄 가계부 앱."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 3.0.0+17
+version: 3.0.1+18
 
 environment:
   sdk: ^3.12.2
