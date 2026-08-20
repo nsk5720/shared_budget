@@ -191,6 +191,44 @@ void main() {
     expect(draft.title, isNot('완료'));
   });
 
+  test('카드 취소 알림은 환불로 구분하고 지출에서 차감한다', () {
+    final draft = SmsTransactionParser.parse(
+      '신한카드\n08/20 13:30 스타벅스 5,800원 승인취소',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.isRefund, isTrue);
+    expect(draft.category, '환불');
+    expect(draft.sourceApp, '신한카드');
+
+    final refund = BudgetTransaction(
+      id: 'refund',
+      title: draft.title,
+      category: draft.category,
+      amount: draft.amount,
+      type: draft.type,
+      date: draft.date,
+      isRefund: true,
+    );
+    expect(totalForType([refund], TransactionType.expense), -5800);
+  });
+
+  test('할부 개월과 자동인식 신뢰도를 기록한다', () {
+    final draft = SmsTransactionParser.parse(
+      '현대카드\n2026-08-20 14:20 교보문고 120,000원 3개월 할부 승인',
+    );
+
+    expect(draft, isNotNull);
+    expect(draft!.installmentMonths, 3);
+    expect(draft.confidence, greaterThanOrEqualTo(0.8));
+    expect(draft.sourceMessageId, isNotEmpty);
+  });
+
+  test('같은 알림은 항상 같은 중복 확인 ID를 만든다', () {
+    expect(stableMessageId('동일한 알림'), stableMessageId('동일한 알림'));
+    expect(stableMessageId('알림 A'), isNot(stableMessageId('알림 B')));
+  });
+
   test('결제 완료와 사용처가 같은 줄이어도 사용처만 남긴다', () {
     final draft = SmsTransactionParser.parse(
       '카카오페이\n22,000원 결제완료 배달의민족 08/12 19:20',
@@ -346,5 +384,26 @@ void main() {
     expect(rule!.title, '월세');
     expect(rule.day, 31);
     expect(rule.amount, 500000);
+  });
+
+  test('매주 반복과 종료일 설정을 복원한다', () {
+    final rule = RecurringTransactionRule.fromMap({
+      'id': 'weekly',
+      'title': '주간 용돈',
+      'category': '용돈',
+      'amount': 20000,
+      'type': 'income',
+      'day': 1,
+      'cycle': 'weekly',
+      'weekday': DateTime.friday,
+      'endDate': '2026-12-31T00:00:00.000',
+      'confirmBeforeAdding': true,
+    });
+
+    expect(rule, isNotNull);
+    expect(rule!.cycle, RepeatCycle.weekly);
+    expect(rule.weekday, DateTime.friday);
+    expect(rule.confirmBeforeAdding, isTrue);
+    expect(rule.endDate, DateTime(2026, 12, 31));
   });
 }

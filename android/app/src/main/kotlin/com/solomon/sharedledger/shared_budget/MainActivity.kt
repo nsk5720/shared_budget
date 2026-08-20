@@ -3,9 +3,13 @@ package com.solomon.sharedledger.shared_budget
 import android.Manifest
 import android.app.Activity
 import android.app.NotificationManager
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
+import android.hardware.fingerprint.FingerprintManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.CancellationSignal
 import android.provider.Settings
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
@@ -15,6 +19,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : FlutterActivity() {
     private val channelName = "shared_budget/sms"
@@ -265,6 +270,15 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
 
+                "hasCompletedOnboarding" -> result.success(
+                    preferences.getBoolean("onboarding_completed", false),
+                )
+
+                "completeOnboarding" -> {
+                    preferences.edit().putBoolean("onboarding_completed", true).apply()
+                    result.success(null)
+                }
+
                 "hasAppPin" -> result.success(AppSecurity.hasPin(this))
                 "verifyAppPin" -> result.success(
                     AppSecurity.verifyPin(this, call.argument<String>("pin").orEmpty()),
@@ -275,14 +289,30 @@ class MainActivity : FlutterActivity() {
                 }
                 "removeAppPin" -> {
                     AppSecurity.removePin(this)
+                    preferences.edit().putBoolean("biometric_enabled", false).apply()
                     result.success(null)
                 }
+
+                "hasBiometric" -> result.success(hasBiometric())
+
+                "getBiometricEnabled" -> result.success(
+                    preferences.getBoolean("biometric_enabled", false),
+                )
+
+                "setBiometricEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    preferences.edit().putBoolean("biometric_enabled", enabled).apply()
+                    result.success(null)
+                }
+
+                "authenticateBiometric" -> authenticateBiometric(result)
 
                 "showBudgetAlert" -> {
                     PaymentQueue.showBudgetAlert(
                         this,
                         call.argument<Number>("expense")?.toLong() ?: 0L,
                         call.argument<Number>("budget")?.toLong() ?: 0L,
+                        call.argument<Number>("threshold")?.toInt() ?: 100,
                     )
                     result.success(null)
                 }
@@ -307,7 +337,7 @@ class MainActivity : FlutterActivity() {
                         startActivityForResult(
                             Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                                 addCategory(Intent.CATEGORY_OPENABLE)
-                                type = "text/csv"
+                                type = call.argument<String>("mimeType") ?: "text/csv"
                                 putExtra(Intent.EXTRA_TITLE, fileName)
                             },
                             exportCsvRequestCode,
@@ -384,6 +414,54 @@ class MainActivity : FlutterActivity() {
     private fun clearPendingCsvOperation() {
         pendingCsvResult = null
         pendingCsvContent = null
+    }
+
+    @Suppress("DEPRECATION")
+    private fun hasBiometric(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val manager = getSystemService(BiometricManager::class.java)
+            manager?.canAuthenticate() == BiometricManager.BIOMETRIC_SUCCESS
+        } else {
+            val fingerprint = getSystemService(FingerprintManager::class.java)
+            fingerprint?.isHardwareDetected == true && fingerprint.hasEnrolledFingerprints()
+        }
+    }
+
+    private fun authenticateBiometric(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !hasBiometric()) {
+            result.success(false)
+            return
+        }
+        val completed = AtomicBoolean(false)
+        fun finish(value: Boolean) {
+            if (completed.compareAndSet(false, true)) result.success(value)
+        }
+        val executor = ContextCompat.getMainExecutor(this)
+        val prompt = BiometricPrompt.Builder(this)
+            .setTitle("가계부 잠금 해제")
+            .setSubtitle("등록된 지문 또는 얼굴로 확인해 주세요")
+            .setNegativeButton("PIN 사용", executor) { _, _ -> finish(false) }
+            .build()
+        prompt.authenticate(
+            CancellationSignal(),
+            executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(
+                    authenticationResult: BiometricPrompt.AuthenticationResult,
+                ) {
+                    finish(true)
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    finish(false)
+                }
+
+                override fun onAuthenticationFailed() {
+                    // 다시 시도할 수 있도록 시스템 인증창을 유지합니다.
+                }
+            },
+        )
     }
 
     companion object {

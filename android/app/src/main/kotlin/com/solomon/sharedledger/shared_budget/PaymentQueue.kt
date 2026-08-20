@@ -115,8 +115,8 @@ object PaymentQueue {
         }
     }
 
-    fun showBudgetAlert(context: Context, expense: Long, budget: Long) {
-        if (budget <= 0L || expense < budget) return
+    fun showBudgetAlert(context: Context, expense: Long, budget: Long, threshold: Int) {
+        if (budget <= 0L || threshold < 70) return
         val manager = context.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
@@ -140,6 +140,8 @@ object PaymentQueue {
         val over = expense - budget
         val text = if (over > 0) {
             "이번 달 예산을 ${String.format("%,d", over)}원 초과했어요."
+        } else if (threshold < 100) {
+            "이번 달 예산의 ${threshold}%를 사용했어요. 남은 예산을 확인해 보세요."
         } else {
             "이번 달 예산에 도달했어요."
         }
@@ -153,7 +155,7 @@ object PaymentQueue {
             .setAutoCancel(true)
             .build()
         try {
-            manager.notify(budgetNotificationId, notification)
+            manager.notify(budgetNotificationId + threshold, notification)
         } catch (_: SecurityException) {
             // 알림 권한이 없어도 앱 안의 예산 진행률은 계속 표시됩니다.
         }

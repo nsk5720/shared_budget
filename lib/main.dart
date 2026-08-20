@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -31,6 +32,7 @@ LinearGradient get appGradient => LinearGradient(
     AppThemeChoice.pink => const [Color(0xFFF178A5), Color(0xFFB18AE6)],
     AppThemeChoice.lavender => const [Color(0xFFA58AE8), Color(0xFF7B8EE8)],
     AppThemeChoice.mint => const [Color(0xFF62C9A7), Color(0xFF72A9D9)],
+    AppThemeChoice.night => const [Color(0xFF6F6AB5), Color(0xFF3E527D)],
   },
 );
 
@@ -59,6 +61,12 @@ class SoftPastelBackground extends StatelessWidget {
         firstOrb: Color(0x335FCBA8),
         secondOrb: Color(0x2279A8E5),
         thirdOrb: Color(0x22FFD090),
+      ),
+      AppThemeChoice.night => const (
+        background: [Color(0xFF181622), Color(0xFF242033)],
+        firstOrb: Color(0x335C57A5),
+        secondOrb: Color(0x227E5A8F),
+        thirdOrb: Color(0x224F8B7B),
       ),
     };
     return DecoratedBox(
@@ -113,8 +121,12 @@ class _PastelOrb extends StatelessWidget {
 
 BoxDecoration softCardDecoration({Color color = AppColors.surface}) {
   final accent = appThemeChoice.value.color;
+  final resolvedColor =
+      appThemeChoice.value == AppThemeChoice.night && color == AppColors.surface
+      ? const Color(0xFF2B2738)
+      : color;
   return BoxDecoration(
-    color: color,
+    color: resolvedColor,
     borderRadius: BorderRadius.circular(24),
     border: Border.all(color: accent.withValues(alpha: 0.2)),
     boxShadow: [
@@ -226,19 +238,21 @@ class _FirebaseBootstrapState extends State<FirebaseBootstrap> {
   }
 }
 
-enum AppThemeChoice { pink, lavender, mint }
+enum AppThemeChoice { pink, lavender, mint, night }
 
 extension AppThemeChoiceX on AppThemeChoice {
   String get label => switch (this) {
     AppThemeChoice.pink => '핑크',
     AppThemeChoice.lavender => '라벤더',
     AppThemeChoice.mint => '민트',
+    AppThemeChoice.night => '나이트',
   };
 
   Color get color => switch (this) {
     AppThemeChoice.pink => AppColors.rose,
     AppThemeChoice.lavender => AppColors.lavender,
     AppThemeChoice.mint => AppColors.mint,
+    AppThemeChoice.night => const Color(0xFF8582CF),
   };
 }
 
@@ -272,6 +286,18 @@ class AppSettingsService {
   static Future<void> removeAppPin() =>
       _channel.invokeMethod<void>('removeAppPin');
 
+  static Future<bool> hasBiometric() async =>
+      await _channel.invokeMethod<bool>('hasBiometric') ?? false;
+
+  static Future<bool> getBiometricEnabled() async =>
+      await _channel.invokeMethod<bool>('getBiometricEnabled') ?? false;
+
+  static Future<void> setBiometricEnabled(bool enabled) =>
+      _channel.invokeMethod<void>('setBiometricEnabled', {'enabled': enabled});
+
+  static Future<bool> authenticateBiometric() async =>
+      await _channel.invokeMethod<bool>('authenticateBiometric') ?? false;
+
   static Future<List<NotificationAppOption>>
   getObservedNotificationApps() async {
     final values = await _channel.invokeListMethod<dynamic>(
@@ -295,19 +321,24 @@ class AppSettingsService {
         'packages': packages,
       });
 
-  static Future<bool?> exportCsv(String fileName, String content) =>
-      _channel.invokeMethod<bool>('exportCsv', {
-        'fileName': fileName,
-        'content': content,
-      });
+  static Future<bool?> exportCsv(
+    String fileName,
+    String content, {
+    String mimeType = 'text/csv',
+  }) => _channel.invokeMethod<bool>('exportCsv', {
+    'fileName': fileName,
+    'content': content,
+    'mimeType': mimeType,
+  });
 
   static Future<String?> importCsv() =>
       _channel.invokeMethod<String>('importCsv');
 
-  static Future<void> showBudgetAlert(int expense, int budget) =>
+  static Future<void> showBudgetAlert(int expense, int budget, int threshold) =>
       _channel.invokeMethod<void>('showBudgetAlert', {
         'expense': expense,
         'budget': budget,
+        'threshold': threshold,
       });
 
   static Future<void> updateHomeWidget(int expense, int budget) =>
@@ -315,6 +346,12 @@ class AppSettingsService {
         'expense': expense,
         'budget': budget,
       });
+
+  static Future<bool> hasCompletedOnboarding() async =>
+      await _channel.invokeMethod<bool>('hasCompletedOnboarding') ?? false;
+
+  static Future<void> completeOnboarding() =>
+      _channel.invokeMethod<void>('completeOnboarding');
 }
 
 class NotificationAppOption {
@@ -337,12 +374,36 @@ class SharedBudgetApp extends StatefulWidget {
 }
 
 class _SharedBudgetAppState extends State<SharedBudgetApp> {
+  bool _onboardingLoaded = false;
+  bool _showOnboarding = false;
+
   @override
   void initState() {
     super.initState();
-    AppSettingsService.getThemeChoice()
-        .then<void>((choice) => appThemeChoice.value = choice)
-        .onError((_, _) {});
+    _loadLocalSettings();
+  }
+
+  Future<void> _loadLocalSettings() async {
+    try {
+      final results = await Future.wait([
+        AppSettingsService.getThemeChoice(),
+        AppSettingsService.hasCompletedOnboarding(),
+      ]);
+      appThemeChoice.value = results[0] as AppThemeChoice;
+      if (mounted) {
+        setState(() {
+          _showOnboarding = !(results[1] as bool);
+          _onboardingLoaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _onboardingLoaded = true);
+    }
+  }
+
+  Future<void> _completeOnboarding() async {
+    await AppSettingsService.completeOnboarding();
+    if (mounted) setState(() => _showOnboarding = false);
   }
 
   @override
@@ -351,11 +412,14 @@ class _SharedBudgetAppState extends State<SharedBudgetApp> {
       valueListenable: appThemeChoice,
       builder: (context, themeChoice, _) {
         final accent = themeChoice.color;
+        final isDark = themeChoice == AppThemeChoice.night;
+        final surface = isDark ? const Color(0xFF2B2738) : AppColors.surface;
+        final foreground = isDark ? const Color(0xFFF8EDF5) : AppColors.ink;
         final colorScheme =
             ColorScheme.fromSeed(
               seedColor: accent,
-              brightness: Brightness.light,
-              surface: AppColors.surface,
+              brightness: isDark ? Brightness.dark : Brightness.light,
+              surface: surface,
             ).copyWith(
               primary: accent,
               onPrimary: Colors.white,
@@ -373,21 +437,22 @@ class _SharedBudgetAppState extends State<SharedBudgetApp> {
           theme: ThemeData(
             useMaterial3: true,
             colorScheme: colorScheme,
-            scaffoldBackgroundColor: AppColors.cream,
-            textTheme: Theme.of(context).textTheme.apply(
-              bodyColor: AppColors.ink,
-              displayColor: AppColors.ink,
-            ),
-            appBarTheme: const AppBarTheme(
+            scaffoldBackgroundColor: isDark
+                ? const Color(0xFF181622)
+                : AppColors.cream,
+            textTheme: Theme.of(
+              context,
+            ).textTheme.apply(bodyColor: foreground, displayColor: foreground),
+            appBarTheme: AppBarTheme(
               backgroundColor: Colors.transparent,
               surfaceTintColor: Colors.transparent,
               elevation: 0,
-              foregroundColor: AppColors.ink,
+              foregroundColor: foreground,
               centerTitle: false,
             ),
             cardTheme: CardThemeData(
               elevation: 0,
-              color: AppColors.surface,
+              color: surface,
               surfaceTintColor: Colors.transparent,
               margin: EdgeInsets.zero,
               shape: RoundedRectangleBorder(
@@ -397,7 +462,9 @@ class _SharedBudgetAppState extends State<SharedBudgetApp> {
             ),
             inputDecorationTheme: InputDecorationTheme(
               filled: true,
-              fillColor: const Color(0xFFFFF7FA),
+              fillColor: isDark
+                  ? const Color(0xFF363044)
+                  : const Color(0xFFFFF7FA),
               labelStyle: const TextStyle(color: AppColors.muted),
               hintStyle: const TextStyle(color: Color(0xFFB3A1AA)),
               prefixIconColor: AppColors.deepRose,
@@ -480,7 +547,7 @@ class _SharedBudgetAppState extends State<SharedBudgetApp> {
               }),
             ),
             dialogTheme: DialogThemeData(
-              backgroundColor: AppColors.surface,
+              backgroundColor: surface,
               surfaceTintColor: Colors.transparent,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
@@ -506,9 +573,174 @@ class _SharedBudgetAppState extends State<SharedBudgetApp> {
               surfaceTintColor: Colors.transparent,
             ),
           ),
-          home: const AuthGate(),
+          home: !_onboardingLoaded
+              ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+              : _showOnboarding
+              ? WelcomeOnboardingPage(onComplete: _completeOnboarding)
+              : const AuthGate(),
         );
       },
+    );
+  }
+}
+
+class WelcomeOnboardingPage extends StatefulWidget {
+  const WelcomeOnboardingPage({super.key, required this.onComplete});
+
+  final Future<void> Function() onComplete;
+
+  @override
+  State<WelcomeOnboardingPage> createState() => _WelcomeOnboardingPageState();
+}
+
+class _WelcomeOnboardingPageState extends State<WelcomeOnboardingPage> {
+  final _controller = PageController();
+  int _page = 0;
+  bool _finishing = false;
+
+  static const _slides = [
+    (
+      icon: Icons.favorite_rounded,
+      title: '둘이서도, 혼자서도 편안하게',
+      body: '개인 가계부를 쓰다가 원하는 사람과 연결해 같은 내역을 함께 볼 수 있어요.',
+    ),
+    (
+      icon: Icons.auto_awesome_rounded,
+      title: '결제 알림을 똑똑하게 정리해요',
+      body: 'SMS와 은행·카드 Push에서 날짜, 사용처, 금액과 분류를 찾아 저장 전에 보여드려요.',
+    ),
+    (
+      icon: Icons.spa_rounded,
+      title: '예산도 부드럽고 한눈에',
+      body: '하루 권장 지출, 월말 예상 금액, 저축 목표까지 깔끔한 대시보드에서 확인하세요.',
+    ),
+  ];
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _next() async {
+    if (_page < _slides.length - 1) {
+      await _controller.nextPage(
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+      return;
+    }
+    if (_finishing) return;
+    setState(() => _finishing = true);
+    await widget.onComplete();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SoftPastelBackground(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: widget.onComplete,
+                  child: const Text('건너뛰기'),
+                ),
+              ),
+              Expanded(
+                child: PageView.builder(
+                  controller: _controller,
+                  onPageChanged: (value) => setState(() => _page = value),
+                  itemCount: _slides.length,
+                  itemBuilder: (context, index) {
+                    final slide = _slides[index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 30),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 118,
+                            height: 118,
+                            decoration: BoxDecoration(
+                              gradient: appGradient,
+                              borderRadius: BorderRadius.circular(40),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.primary.withValues(alpha: 0.22),
+                                  blurRadius: 30,
+                                  offset: const Offset(0, 14),
+                                ),
+                              ],
+                            ),
+                            child: Icon(
+                              slide.icon,
+                              color: Colors.white,
+                              size: 52,
+                            ),
+                          ),
+                          const SizedBox(height: 36),
+                          Text(
+                            slide.title,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 25,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            slide.body,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 15,
+                              height: 1.6,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  _slides.length,
+                  (index) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: index == _page ? 24 : 8,
+                    height: 8,
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    decoration: BoxDecoration(
+                      color: index == _page
+                          ? Theme.of(context).colorScheme.primary
+                          : AppColors.border,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 54,
+                  child: FilledButton(
+                    onPressed: _finishing ? null : _next,
+                    child: Text(_page == _slides.length - 1 ? '시작하기' : '다음'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -727,7 +959,7 @@ class _LoginPageState extends State<LoginPage> {
         ),
       ),
     );
-    resetEmailController.dispose();
+    disposeControllerAfterDialog(resetEmailController);
 
     if (sent == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -984,7 +1216,16 @@ bool isLearnableMerchantTitle(String title) {
       !const {'카드결제', '결제', '입금', '출금', '송금', '이체', '완료', '알림'}.contains(value);
 }
 
-const defaultExpenseCategories = ['식비', '카페', '교통', '쇼핑', '생활', '의료', '기타'];
+const defaultExpenseCategories = [
+  '식비',
+  '카페',
+  '교통',
+  '쇼핑',
+  '생활',
+  '의료',
+  '환불',
+  '기타',
+];
 
 const defaultIncomeCategories = ['급여', '용돈', '부수입', '기타'];
 
@@ -995,6 +1236,7 @@ const defaultCategoryIconKeys = <String, String>{
   '쇼핑': 'shopping',
   '생활': 'home',
   '의료': 'medical',
+  '환불': 'refund',
   '기타': 'more',
   '급여': 'bank',
   '용돈': 'savings',
@@ -1019,6 +1261,7 @@ const categoryIconChoices = <String, IconData>{
   'phone': Icons.phone_android_rounded,
   'car': Icons.directions_car_rounded,
   'game': Icons.sports_esports_rounded,
+  'refund': Icons.currency_exchange_rounded,
   'more': Icons.more_horiz_rounded,
 };
 
@@ -1036,6 +1279,12 @@ class BudgetTransaction {
     required this.date,
     this.memo = '',
     this.deletedAt,
+    this.createdBy = '',
+    this.sourceApp = '',
+    this.installmentMonths,
+    this.recognitionConfidence,
+    this.sourceMessageId = '',
+    this.isRefund = false,
   });
 
   final String id;
@@ -1046,6 +1295,12 @@ class BudgetTransaction {
   final DateTime date;
   final String memo;
   final DateTime? deletedAt;
+  final String createdBy;
+  final String sourceApp;
+  final int? installmentMonths;
+  final double? recognitionConfidence;
+  final String sourceMessageId;
+  final bool isRefund;
 
   Map<String, Object?> toFirestore(
     String userId, {
@@ -1059,8 +1314,19 @@ class BudgetTransaction {
       'type': type.name,
       'date': Timestamp.fromDate(date),
       'memo': memo,
+      'isRefund': isRefund,
       'updatedAt': FieldValue.serverTimestamp(),
     };
+    if (sourceApp.isNotEmpty) data['sourceApp'] = sourceApp;
+    if (installmentMonths != null) {
+      data['installmentMonths'] = installmentMonths;
+    }
+    if (recognitionConfidence != null) {
+      data['recognitionConfidence'] = recognitionConfidence;
+    }
+    if (sourceMessageId.isNotEmpty) {
+      data['sourceMessageId'] = sourceMessageId;
+    }
     if (includeCreatedBy) {
       data['createdBy'] = userId;
     }
@@ -1085,6 +1351,16 @@ class LedgerOption {
   bool get isShared => id.startsWith('shared_');
 }
 
+enum RepeatCycle { monthly, weekly, yearly }
+
+extension RepeatCycleX on RepeatCycle {
+  String get label => switch (this) {
+    RepeatCycle.monthly => '매월',
+    RepeatCycle.weekly => '매주',
+    RepeatCycle.yearly => '매년',
+  };
+}
+
 class RecurringTransactionRule {
   const RecurringTransactionRule({
     required this.id,
@@ -1095,6 +1371,12 @@ class RecurringTransactionRule {
     required this.day,
     this.memo = '',
     this.enabled = true,
+    this.cycle = RepeatCycle.monthly,
+    this.month = 1,
+    this.weekday = DateTime.monday,
+    this.endDate,
+    this.confirmBeforeAdding = false,
+    this.variableAmount = false,
   });
 
   final String id;
@@ -1105,6 +1387,12 @@ class RecurringTransactionRule {
   final int day;
   final String memo;
   final bool enabled;
+  final RepeatCycle cycle;
+  final int month;
+  final int weekday;
+  final DateTime? endDate;
+  final bool confirmBeforeAdding;
+  final bool variableAmount;
 
   Map<String, Object?> toMap() => {
     'id': id,
@@ -1115,6 +1403,12 @@ class RecurringTransactionRule {
     'day': day,
     'memo': memo,
     'enabled': enabled,
+    'cycle': cycle.name,
+    'month': month,
+    'weekday': weekday,
+    'endDate': endDate?.toIso8601String(),
+    'confirmBeforeAdding': confirmBeforeAdding,
+    'variableAmount': variableAmount,
   };
 
   static RecurringTransactionRule? fromMap(Object? value) {
@@ -1135,6 +1429,18 @@ class RecurringTransactionRule {
       day: day.clamp(1, 31),
       memo: map['memo'] as String? ?? '',
       enabled: map['enabled'] as bool? ?? true,
+      cycle: RepeatCycle.values.firstWhere(
+        (cycle) => cycle.name == map['cycle'],
+        orElse: () => RepeatCycle.monthly,
+      ),
+      month: ((map['month'] as num?)?.toInt() ?? 1).clamp(1, 12),
+      weekday: ((map['weekday'] as num?)?.toInt() ?? DateTime.monday).clamp(
+        DateTime.monday,
+        DateTime.sunday,
+      ),
+      endDate: DateTime.tryParse(map['endDate'] as String? ?? ''),
+      confirmBeforeAdding: map['confirmBeforeAdding'] as bool? ?? false,
+      variableAmount: map['variableAmount'] as bool? ?? false,
     );
   }
 }
@@ -1147,6 +1453,11 @@ class SmsTransactionDraft {
     required this.date,
     required this.rawMessage,
     this.type = TransactionType.expense,
+    this.sourceApp = '',
+    this.installmentMonths,
+    this.confidence = 1,
+    this.sourceMessageId = '',
+    this.isRefund = false,
   });
 
   final String title;
@@ -1155,6 +1466,11 @@ class SmsTransactionDraft {
   final DateTime date;
   final String rawMessage;
   final TransactionType type;
+  final String sourceApp;
+  final int? installmentMonths;
+  final double confidence;
+  final String sourceMessageId;
+  final bool isRefund;
 }
 
 class PendingPayment {
@@ -1206,18 +1522,51 @@ class SmsTransactionParser {
       return null;
     }
 
-    final type = _incomeKeywords.hasMatch(message)
+    final isRefund = RegExp(r'취소|환불|환급|승인취소').hasMatch(message);
+    final type = isRefund
+        ? TransactionType.expense
+        : _incomeKeywords.hasMatch(message)
         ? TransactionType.income
         : TransactionType.expense;
     final title = _findTitle(message, parsedAmount.match, type);
+    final sourceApp = _findSource(rawMessage);
+    final installment = RegExp(r'(\d{1,2})\s*개월\s*할부').firstMatch(message);
+    final date = _findDate(message, receivedAt ?? DateTime.now());
+    var confidence = 0.45;
+    if (!const {'입금', '카드 결제'}.contains(title)) confidence += 0.25;
+    if (_containsDate(message)) confidence += 0.15;
+    if (sourceApp.isNotEmpty) confidence += 0.1;
+    if (_transactionKeywords.hasMatch(message)) confidence += 0.05;
     return SmsTransactionDraft(
       title: title,
       amount: parsedAmount.value,
-      category: _categoryFor(title, message, type),
-      date: _findDate(message, receivedAt ?? DateTime.now()),
+      category: isRefund ? '환불' : _categoryFor(title, message, type),
+      date: date,
       rawMessage: rawMessage,
       type: type,
+      sourceApp: sourceApp,
+      installmentMonths: int.tryParse(installment?.group(1) ?? ''),
+      confidence: confidence.clamp(0, 1),
+      sourceMessageId: stableMessageId(rawMessage),
+      isRefund: isRefund,
     );
+  }
+
+  static String _findSource(String rawMessage) {
+    final lines = rawMessage.split('\n');
+    if (lines.length < 2) return '';
+    final first = lines.first.trim();
+    return first.length <= 40 &&
+            !_amountPattern.hasMatch(first) &&
+            !_transactionKeywords.hasMatch(first)
+        ? first
+        : '';
+  }
+
+  static bool _containsDate(String message) {
+    return RegExp(
+      r'(?:\d{2,4}[./-])?\d{1,2}[./-]\d{1,2}|\d{1,2}월\s*\d{1,2}일',
+    ).hasMatch(message);
   }
 
   static String _contentWithoutSource(String rawMessage) {
@@ -1538,6 +1887,8 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   bool _connectingFirestore = false;
   int _pendingPaymentCount = 0;
   String? _connectionError;
+  bool _isFromCache = false;
+  bool _hasPendingWrites = false;
   String? _lastPresentedSms;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _transactionSubscription;
@@ -1547,22 +1898,29 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
   final List<BudgetTransaction> _transactions = [];
   final List<BudgetTransaction> _deletedTransactions = [];
+  final Set<String> _knownTransactionIds = {};
+  bool _transactionStreamInitialized = false;
   List<String> _expenseCategories = [...defaultExpenseCategories];
   List<String> _incomeCategories = [...defaultIncomeCategories];
   Map<String, String> _categoryIconKeys = {...defaultCategoryIconKeys};
   Map<String, String> _merchantCategoryRules = {};
   Map<String, String> _merchantTitleRules = {};
   int _monthlyBudget = 0;
+  Map<String, int> _categoryBudgets = {};
+  int _monthlySavingsGoal = 0;
   List<RecurringTransactionRule> _recurringRules = [];
   String? _recurringGenerationKey;
   String? _budgetAlertKey;
   bool _lockLoaded = false;
   bool _appLockEnabled = false;
+  bool _biometricEnabled = false;
   bool _appUnlocked = true;
   DateTime? _backgroundedAt;
   String _ledgerId = '';
   String _ledgerName = '내 가계부';
   List<String> _ledgerMemberEmails = [];
+  List<String> _ledgerMemberIds = [];
+  String _ledgerColorKey = 'pink';
   List<LedgerOption> _availableLedgers = [];
   final Map<String, DocumentSnapshot<Map<String, dynamic>>> _ledgerDocuments =
       {};
@@ -1608,10 +1966,15 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
   Future<void> _loadAppLock() async {
     try {
-      final enabled = await AppSettingsService.hasAppPin();
+      final values = await Future.wait([
+        AppSettingsService.hasAppPin(),
+        AppSettingsService.getBiometricEnabled(),
+      ]);
+      final enabled = values[0];
       if (mounted) {
         setState(() {
           _appLockEnabled = enabled;
+          _biometricEnabled = values[1];
           _appUnlocked = !enabled;
           _lockLoaded = true;
         });
@@ -1836,7 +2199,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       batch.set(database.collection('users').doc(user.uid), {
         'email': user.email,
         'inviteCode': inviteCode,
-        'appBuild': '2.0.0+16',
+        'appBuild': '3.0.0+17',
         'lastLoginAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       batch.set(
@@ -2000,12 +2363,17 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
             ?.whereType<String>()
             .toList() ??
         [];
+    final memberIds =
+        (data['memberIds'] as List<dynamic>?)?.whereType<String>().toList() ??
+        [];
 
     if (_ledgerId == ledgerDocument.id) {
       if (mounted) {
         setState(() {
           _ledgerName = data['name'] as String? ?? '우리 가계부';
           _ledgerMemberEmails = memberEmails;
+          _ledgerMemberIds = memberIds;
+          _ledgerColorKey = data['colorKey'] as String? ?? 'pink';
         });
       }
       return;
@@ -2019,9 +2387,13 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       setState(() {
         _ledgerName = data['name'] as String? ?? '우리 가계부';
         _ledgerMemberEmails = memberEmails;
+        _ledgerMemberIds = memberIds;
+        _ledgerColorKey = data['colorKey'] as String? ?? 'pink';
         _loadingTransactions = true;
         _transactions.clear();
         _deletedTransactions.clear();
+        _knownTransactionIds.clear();
+        _transactionStreamInitialized = false;
       });
     }
 
@@ -2045,6 +2417,11 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
               ?.whereType<String>()
               .toList() ??
           [];
+      final memberIds =
+          (ledgerData['memberIds'] as List<dynamic>?)
+              ?.whereType<String>()
+              .toList() ??
+          [];
       final iconKeys = (ledgerData['categoryIcons'] as Map<String, dynamic>?)
           ?.map((key, value) => MapEntry(key, value.toString()));
       final merchantRules =
@@ -2056,6 +2433,13 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
             (key, value) => MapEntry(key, value.toString()),
           );
       final monthlyBudget = (ledgerData['monthlyBudget'] as num?)?.toInt() ?? 0;
+      final categoryBudgets =
+          (ledgerData['categoryBudgets'] as Map<String, dynamic>?)?.map(
+            (key, value) => MapEntry(key, (value as num).toInt()),
+          ) ??
+          <String, int>{};
+      final monthlySavingsGoal =
+          (ledgerData['monthlySavingsGoal'] as num?)?.toInt() ?? 0;
       final recurringRules =
           (ledgerData['recurringRules'] as List<dynamic>? ?? const [])
               .map(RecurringTransactionRule.fromMap)
@@ -2064,9 +2448,11 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       setState(() {
         _ledgerName = ledgerData['name'] as String? ?? '우리 가계부';
         _ledgerMemberEmails = emails;
+        _ledgerMemberIds = memberIds;
+        _ledgerColorKey = ledgerData['colorKey'] as String? ?? 'pink';
         _expenseCategories = expenses == null || expenses.isEmpty
             ? [...defaultExpenseCategories]
-            : expenses;
+            : [...expenses, if (!expenses.contains('환불')) '환불'];
         _incomeCategories = incomes == null || incomes.isEmpty
             ? [...defaultIncomeCategories]
             : incomes;
@@ -2074,6 +2460,8 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         _merchantCategoryRules = {...?merchantRules};
         _merchantTitleRules = {...?merchantTitleRules};
         _monthlyBudget = monthlyBudget;
+        _categoryBudgets = categoryBudgets;
+        _monthlySavingsGoal = monthlySavingsGoal;
         _recurringRules = recurringRules;
         _runtimeCategoryIconKeys
           ..clear()
@@ -2086,14 +2474,15 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     _transactionSubscription = ledgerReference
         .collection('transactions')
         .orderBy('date', descending: true)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
           (snapshot) {
+            BudgetTransaction? newPartnerTransaction;
             final transactions = snapshot.docs.map((document) {
               final transactionData = document.data();
               final timestamp = transactionData['date'];
               final deletedTimestamp = transactionData['deletedAt'];
-              return BudgetTransaction(
+              final transaction = BudgetTransaction(
                 id: document.id,
                 title: transactionData['title'] as String? ?? '이름 없음',
                 category: transactionData['category'] as String? ?? '기타',
@@ -2105,11 +2494,34 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
                     ? timestamp.toDate()
                     : DateTime.now(),
                 memo: transactionData['memo'] as String? ?? '',
+                createdBy: transactionData['createdBy'] as String? ?? '',
+                sourceApp: transactionData['sourceApp'] as String? ?? '',
+                installmentMonths:
+                    (transactionData['installmentMonths'] as num?)?.toInt(),
+                recognitionConfidence:
+                    (transactionData['recognitionConfidence'] as num?)
+                        ?.toDouble(),
+                sourceMessageId:
+                    transactionData['sourceMessageId'] as String? ?? '',
+                isRefund: transactionData['isRefund'] as bool? ?? false,
                 deletedAt: deletedTimestamp is Timestamp
                     ? deletedTimestamp.toDate()
                     : null,
               );
+              if (_transactionStreamInitialized &&
+                  !_knownTransactionIds.contains(document.id) &&
+                  transaction.createdBy.isNotEmpty &&
+                  transaction.createdBy != widget.user.uid &&
+                  transaction.deletedAt == null) {
+                newPartnerTransaction ??= transaction;
+              }
+              return transaction;
             }).toList();
+
+            _knownTransactionIds
+              ..clear()
+              ..addAll(snapshot.docs.map((document) => document.id));
+            _transactionStreamInitialized = true;
 
             if (mounted) {
               setState(() {
@@ -2124,9 +2536,16 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
                     transactions.where((item) => item.deletedAt != null),
                   );
                 _loadingTransactions = false;
+                _isFromCache = snapshot.metadata.isFromCache;
+                _hasPendingWrites = snapshot.metadata.hasPendingWrites;
                 _connectionError = null;
               });
               unawaited(_updateBudgetServices());
+              if (newPartnerTransaction != null) {
+                _showMessage(
+                  '함께 쓰는 사람이 ${newPartnerTransaction!.title} 내역을 추가했어요.',
+                );
+              }
             }
           },
           onError: (Object error) {
@@ -2337,24 +2756,67 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
           .collection('transactions');
       final lastDay = DateTime(now.year, now.month + 1, 0).day;
       for (final rule in _recurringRules.where((item) => item.enabled)) {
-        final day = rule.day.clamp(1, lastDay);
-        if (day > now.day) continue;
+        final candidateDates = <DateTime>[];
+        if (rule.cycle == RepeatCycle.monthly) {
+          candidateDates.add(
+            DateTime(now.year, now.month, rule.day.clamp(1, lastDay), 9),
+          );
+        } else if (rule.cycle == RepeatCycle.yearly &&
+            rule.month == now.month) {
+          candidateDates.add(
+            DateTime(now.year, now.month, rule.day.clamp(1, lastDay), 9),
+          );
+        } else if (rule.cycle == RepeatCycle.weekly) {
+          for (var day = 1; day <= now.day; day++) {
+            final date = DateTime(now.year, now.month, day, 9);
+            if (date.weekday == rule.weekday) candidateDates.add(date);
+          }
+        }
         final safeRuleId = rule.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-        final document = collection.doc(
-          'recurring_${safeRuleId}_${now.year}_${now.month.toString().padLeft(2, '0')}',
-        );
-        final existing = await document.get();
-        if (existing.exists) continue;
-        final transaction = BudgetTransaction(
-          id: document.id,
-          title: rule.title,
-          category: rule.category,
-          amount: rule.amount,
-          type: rule.type,
-          date: DateTime(now.year, now.month, day, 9),
-          memo: rule.memo.isEmpty ? '반복 내역 자동등록' : '${rule.memo}\n반복 내역 자동등록',
-        );
-        await document.set(transaction.toFirestore(widget.user.uid));
+        for (final date in candidateDates) {
+          final endExclusive = rule.endDate == null
+              ? null
+              : DateTime(
+                  rule.endDate!.year,
+                  rule.endDate!.month,
+                  rule.endDate!.day + 1,
+                );
+          if (date.isAfter(now) ||
+              (endExclusive != null && !date.isBefore(endExclusive))) {
+            continue;
+          }
+          final dateKey =
+              '${date.year}${date.month.toString().padLeft(2, '0')}'
+              '${date.day.toString().padLeft(2, '0')}';
+          final document = collection.doc('recurring_${safeRuleId}_$dateKey');
+          final existing = await document.get();
+          if (existing.exists) continue;
+          var transaction = BudgetTransaction(
+            id: document.id,
+            title: rule.title,
+            category: rule.category,
+            amount: rule.amount,
+            type: rule.type,
+            date: date,
+            memo: rule.memo.isEmpty ? '반복 내역 자동등록' : '${rule.memo}\n반복 내역 자동등록',
+          );
+          if ((rule.confirmBeforeAdding || rule.variableAmount) && mounted) {
+            final confirmed = await showModalBottomSheet<BudgetTransaction>(
+              context: context,
+              isScrollControlled: true,
+              useSafeArea: true,
+              backgroundColor: Colors.transparent,
+              builder: (context) => AddTransactionSheet(
+                initialTransaction: transaction,
+                expenseCategories: _expenseCategories,
+                incomeCategories: _incomeCategories,
+              ),
+            );
+            if (confirmed == null) continue;
+            transaction = confirmed;
+          }
+          await document.set(transaction.toFirestore(widget.user.uid));
+        }
       }
     } catch (error) {
       _recurringGenerationKey = null;
@@ -2364,21 +2826,28 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
   Future<void> _updateBudgetServices() async {
     final now = DateTime.now();
-    final expense = _transactions
-        .where(
-          (item) =>
-              item.type == TransactionType.expense &&
-              isSameMonth(item.date, now),
-        )
-        .fold<int>(0, (total, item) => total + item.amount);
+    final expense = totalForType(
+      _transactions.where((item) => isSameMonth(item.date, now)).toList(),
+      TransactionType.expense,
+    );
     try {
       await AppSettingsService.updateHomeWidget(expense, _monthlyBudget);
-      final alertKey = '$_ledgerId-${now.year}-${now.month}';
-      if (_monthlyBudget > 0 &&
-          expense >= _monthlyBudget &&
-          _budgetAlertKey != alertKey) {
+      final ratio = _monthlyBudget <= 0 ? 0 : expense / _monthlyBudget;
+      final threshold = ratio >= 1
+          ? 100
+          : ratio >= 0.9
+          ? 90
+          : ratio >= 0.7
+          ? 70
+          : 0;
+      final alertKey = '$_ledgerId-${now.year}-${now.month}-$threshold';
+      if (threshold > 0 && _budgetAlertKey != alertKey) {
         _budgetAlertKey = alertKey;
-        await AppSettingsService.showBudgetAlert(expense, _monthlyBudget);
+        await AppSettingsService.showBudgetAlert(
+          expense,
+          _monthlyBudget,
+          threshold,
+        );
       }
     } on MissingPluginException {
       // Android 외 플랫폼에서는 앱 안의 예산 카드만 표시합니다.
@@ -2387,6 +2856,8 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
   Future<void> _saveAutomationSettings({
     required int monthlyBudget,
+    required Map<String, int> categoryBudgets,
+    required int monthlySavingsGoal,
     required List<RecurringTransactionRule> recurringRules,
   }) async {
     await FirebaseFirestore.instance
@@ -2394,6 +2865,8 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         .doc(_ledgerId)
         .update({
           'monthlyBudget': monthlyBudget,
+          'categoryBudgets': categoryBudgets,
+          'monthlySavingsGoal': monthlySavingsGoal,
           'recurringRules': recurringRules.map((rule) => rule.toMap()).toList(),
           'updatedAt': FieldValue.serverTimestamp(),
         })
@@ -2404,6 +2877,16 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
   Future<void> _addTransaction(BudgetTransaction transaction) async {
     if (_ledgerId.isEmpty) {
       throw FirebaseException(plugin: 'cloud_firestore', code: 'unavailable');
+    }
+    if (transaction.sourceMessageId.isNotEmpty &&
+        _transactions.any(
+          (item) => item.sourceMessageId == transaction.sourceMessageId,
+        )) {
+      throw FirebaseException(
+        plugin: 'cloud_firestore',
+        code: 'already-exists',
+        message: 'The same notification was already saved.',
+      );
     }
     await FirebaseFirestore.instance
         .collection('ledgers')
@@ -2432,6 +2915,11 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       date: draft.date,
       rawMessage: draft.rawMessage,
       type: draft.type,
+      sourceApp: draft.sourceApp,
+      installmentMonths: draft.installmentMonths,
+      confidence: draft.confidence,
+      sourceMessageId: draft.sourceMessageId,
+      isRefund: draft.isRefund,
     );
   }
 
@@ -2748,11 +3236,190 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _exportCsvRange() async {
+    if (_transactions.isEmpty) return;
+    final dates = _transactions.map((item) => item.date).toList()..sort();
+    if (!mounted) return;
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDateRange: DateTimeRange(start: dates.first, end: dates.last),
+      helpText: 'CSV로 내보낼 기간 선택',
+    );
+    if (range == null) return;
+    final end = range.end.add(const Duration(days: 1));
+    final selected = _transactions
+        .where(
+          (item) => !item.date.isBefore(range.start) && item.date.isBefore(end),
+        )
+        .toList();
+    if (selected.isEmpty) {
+      _showMessage('선택한 기간에 내역이 없습니다.');
+      return;
+    }
+    final saved = await AppSettingsService.exportCsv(
+      '가계부_${range.start.year}${range.start.month.toString().padLeft(2, '0')}'
+      '_${range.end.year}${range.end.month.toString().padLeft(2, '0')}.csv',
+      transactionsToCsv(selected),
+    );
+    if (saved == true && mounted) _showMessage('${selected.length}건을 저장했습니다.');
+  }
+
+  Future<void> _exportFullBackup() async {
+    final content = jsonEncode({
+      'format': 'shared-budget-backup',
+      'version': 1,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'ledger': {
+        'name': _ledgerName,
+        'monthlyBudget': _monthlyBudget,
+        'categoryBudgets': _categoryBudgets,
+        'monthlySavingsGoal': _monthlySavingsGoal,
+        'expenseCategories': _expenseCategories,
+        'incomeCategories': _incomeCategories,
+        'categoryIcons': _categoryIconKeys,
+        'recurringRules': _recurringRules.map((item) => item.toMap()).toList(),
+      },
+      'transactions': _transactions
+          .map(
+            (item) => {
+              'title': item.title,
+              'category': item.category,
+              'amount': item.amount,
+              'type': item.type.name,
+              'date': item.date.toIso8601String(),
+              'memo': item.memo,
+              'sourceApp': item.sourceApp,
+              'installmentMonths': item.installmentMonths,
+              'isRefund': item.isRefund,
+              'sourceMessageId': item.sourceMessageId,
+            },
+          )
+          .toList(),
+    });
+    final now = DateTime.now();
+    final saved = await AppSettingsService.exportCsv(
+      '가계부_전체백업_${now.year}${now.month.toString().padLeft(2, '0')}'
+      '${now.day.toString().padLeft(2, '0')}.json',
+      content,
+      mimeType: 'application/json',
+    );
+    if (saved == true && mounted) _showMessage('전체 백업 파일을 저장했습니다.');
+  }
+
+  Future<void> _importFullBackup() async {
+    try {
+      final content = await AppSettingsService.importCsv();
+      if (content == null || content.trim().isEmpty || !mounted) return;
+      final decoded = jsonDecode(content);
+      if (decoded is! Map || decoded['format'] != 'shared-budget-backup') {
+        throw const FormatException('우리 가계부 전체 백업 파일이 아닙니다.');
+      }
+      final ledger = Map<String, dynamic>.from(decoded['ledger'] as Map? ?? {});
+      final rawTransactions = (decoded['transactions'] as List? ?? const []);
+      final restored = <BudgetTransaction>[];
+      for (var index = 0; index < rawTransactions.length; index++) {
+        final map = Map<String, dynamic>.from(rawTransactions[index] as Map);
+        final date = DateTime.tryParse(map['date'] as String? ?? '');
+        final amount = (map['amount'] as num?)?.toInt() ?? 0;
+        if (date == null || amount <= 0) continue;
+        final sourceId = map['sourceMessageId'] as String? ?? '';
+        restored.add(
+          BudgetTransaction(
+            id: 'backup_$index',
+            title: map['title'] as String? ?? '이름 없음',
+            category: map['category'] as String? ?? '기타',
+            amount: amount,
+            type: map['type'] == 'income'
+                ? TransactionType.income
+                : TransactionType.expense,
+            date: date,
+            memo: map['memo'] as String? ?? '',
+            sourceApp: map['sourceApp'] as String? ?? '',
+            installmentMonths: (map['installmentMonths'] as num?)?.toInt(),
+            isRefund: map['isRefund'] as bool? ?? false,
+            sourceMessageId: sourceId.isEmpty
+                ? stableMessageId(
+                    '${date.toIso8601String()}|${map['title']}|$amount|$index',
+                  )
+                : sourceId,
+          ),
+        );
+      }
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('전체 백업 복원'),
+          content: Text(
+            '설정과 내역 ${restored.length}건을 현재 가계부에 복원할까요?\n'
+            '이미 같은 알림으로 저장된 내역은 건너뜁니다.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('복원'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      final database = FirebaseFirestore.instance;
+      final ledgerReference = database.collection('ledgers').doc(_ledgerId);
+      await ledgerReference.update({
+        if ((ledger['name'] as String? ?? '').trim().isNotEmpty)
+          'name': ledger['name'],
+        'monthlyBudget': (ledger['monthlyBudget'] as num?)?.toInt() ?? 0,
+        'categoryBudgets': ledger['categoryBudgets'] ?? {},
+        'monthlySavingsGoal':
+            (ledger['monthlySavingsGoal'] as num?)?.toInt() ?? 0,
+        'expenseCategories': ledger['expenseCategories'] ?? _expenseCategories,
+        'incomeCategories': ledger['incomeCategories'] ?? _incomeCategories,
+        'categoryIcons': ledger['categoryIcons'] ?? _categoryIconKeys,
+        'recurringRules': ledger['recurringRules'] ?? const [],
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      final existingIds = _transactions
+          .map((item) => item.sourceMessageId)
+          .where((value) => value.isNotEmpty)
+          .toSet();
+      final unique = restored
+          .where((item) => existingIds.add(item.sourceMessageId))
+          .toList();
+      for (var start = 0; start < unique.length; start += 400) {
+        final end = start + 400 < unique.length ? start + 400 : unique.length;
+        final batch = database.batch();
+        for (final item in unique.sublist(start, end)) {
+          batch.set(
+            ledgerReference.collection('transactions').doc(),
+            item.toFirestore(widget.user.uid),
+          );
+        }
+        await batch.commit();
+      }
+      if (mounted) _showMessage('설정과 내역 ${unique.length}건을 복원했습니다.');
+    } on FormatException catch (error) {
+      if (mounted) _showMessage(error.message);
+    } catch (error) {
+      if (mounted) _showMessage('전체 백업을 복원하지 못했습니다.');
+    }
+  }
+
   Future<void> _importCsvFile() async {
     try {
       final content = await AppSettingsService.importCsv();
       if (content == null || content.trim().isEmpty || !mounted) return;
-      final transactions = transactionsFromCsv(content);
+      final existingIds = _transactions
+          .map((item) => item.sourceMessageId)
+          .where((value) => value.isNotEmpty)
+          .toSet();
+      final transactions = transactionsFromCsv(
+        content,
+      ).where((item) => existingIds.add(item.sourceMessageId)).toList();
       if (transactions.isEmpty) {
         _showMessage('가져올 수 있는 내역을 찾지 못했습니다.');
         return;
@@ -2803,19 +3470,28 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       MaterialPageRoute<void>(
         builder: (context) => AdvancedSettingsPage(
           monthlyBudget: _monthlyBudget,
+          categoryBudgets: _categoryBudgets,
+          monthlySavingsGoal: _monthlySavingsGoal,
           recurringRules: _recurringRules,
           expenseCategories: _expenseCategories,
           incomeCategories: _incomeCategories,
           onSaveAutomation: _saveAutomationSettings,
           onExportCsv: _exportCsvFile,
+          onExportCsvRange: _exportCsvRange,
           onImportCsv: _importCsvFile,
+          onExportFullBackup: _exportFullBackup,
+          onImportFullBackup: _importFullBackup,
           onLockChanged: (enabled) {
             if (mounted) {
               setState(() {
                 _appLockEnabled = enabled;
                 _appUnlocked = true;
+                if (!enabled) _biometricEnabled = false;
               });
             }
+          },
+          onBiometricChanged: (enabled) {
+            if (mounted) setState(() => _biometricEnabled = enabled);
           },
         ),
       ),
@@ -2843,6 +3519,20 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
       ..addAll(icons);
   }
 
+  Future<void> _updateLedgerAppearance(String name, String colorKey) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) return;
+    await FirebaseFirestore.instance
+        .collection('ledgers')
+        .doc(_ledgerId)
+        .update({
+          'name': trimmedName,
+          'colorKey': colorKey,
+          'updatedAt': FieldValue.serverTimestamp(),
+        })
+        .timeout(const Duration(seconds: 15));
+  }
+
   Future<void> _openCategoryManager() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -2864,6 +3554,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
     if (_appLockEnabled && !_appUnlocked) {
       return AppPinUnlockPage(
         onUnlocked: () => setState(() => _appUnlocked = true),
+        biometricEnabled: _biometricEnabled,
       );
     }
     final pages = [
@@ -2871,9 +3562,16 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         transactions: _transactions,
         isLoading: _loadingTransactions,
         monthlyBudget: _monthlyBudget,
+        categoryBudgets: _categoryBudgets,
+        monthlySavingsGoal: _monthlySavingsGoal,
         pendingPaymentCount: _pendingPaymentCount,
         onNotificationsPressed: _openPendingPayments,
         onSettingsPressed: _openAdvancedSettings,
+        syncLabel: _hasPendingWrites
+            ? '저장 중'
+            : _isFromCache
+            ? '오프라인'
+            : '동기화됨',
         onViewAll: () => setState(() => _currentIndex = 1),
         onTransactionTap: _openTransactionActions,
       ),
@@ -2898,6 +3596,11 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
         ledgerId: _ledgerId,
         ledgerName: _ledgerName,
         memberEmails: _ledgerMemberEmails,
+        memberIds: _ledgerMemberIds,
+        transactions: _transactions,
+        currentUserId: widget.user.uid,
+        ledgerColorKey: _ledgerColorKey,
+        onUpdateLedgerAppearance: _updateLedgerAppearance,
       ),
     ];
 
@@ -3040,6 +3743,7 @@ class _BudgetShellState extends State<BudgetShell> with WidgetsBindingObserver {
 
 String _firestoreErrorMessage(FirebaseException error) {
   return switch (error.code) {
+    'already-exists' => '이미 저장한 문자·Push 내역입니다.',
     'permission-denied' => '저장 권한이 없습니다. Firestore 보안 규칙을 확인해 주세요.',
     'unavailable' => 'Firebase에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.',
     'not-found' => 'Firestore 데이터베이스가 아직 생성되지 않았습니다.',
@@ -3054,9 +3758,12 @@ class HomePage extends StatelessWidget {
     required this.transactions,
     required this.isLoading,
     required this.monthlyBudget,
+    required this.categoryBudgets,
+    required this.monthlySavingsGoal,
     required this.pendingPaymentCount,
     required this.onNotificationsPressed,
     required this.onSettingsPressed,
+    required this.syncLabel,
     required this.onViewAll,
     required this.onTransactionTap,
   });
@@ -3064,9 +3771,12 @@ class HomePage extends StatelessWidget {
   final List<BudgetTransaction> transactions;
   final bool isLoading;
   final int monthlyBudget;
+  final Map<String, int> categoryBudgets;
+  final int monthlySavingsGoal;
   final int pendingPaymentCount;
   final VoidCallback onNotificationsPressed;
   final VoidCallback onSettingsPressed;
+  final String syncLabel;
   final VoidCallback onViewAll;
   final ValueChanged<BudgetTransaction> onTransactionTap;
 
@@ -3076,21 +3786,19 @@ class HomePage extends StatelessWidget {
     final monthlyTransactions = transactions
         .where((item) => isSameMonth(item.date, now))
         .toList();
-    final income = monthlyTransactions
-        .where((item) => item.type == TransactionType.income)
-        .fold<int>(0, (total, item) => total + item.amount);
-    final expense = monthlyTransactions
-        .where((item) => item.type == TransactionType.expense)
-        .fold<int>(0, (total, item) => total + item.amount);
-    final todayExpense = transactions
-        .where(
-          (item) =>
-              item.type == TransactionType.expense &&
-              item.date.year == now.year &&
-              item.date.month == now.month &&
-              item.date.day == now.day,
-        )
-        .fold<int>(0, (total, item) => total + item.amount);
+    final income = totalForType(monthlyTransactions, TransactionType.income);
+    final expense = totalForType(monthlyTransactions, TransactionType.expense);
+    final todayExpense = totalForType(
+      transactions
+          .where(
+            (item) =>
+                item.date.year == now.year &&
+                item.date.month == now.month &&
+                item.date.day == now.day,
+          )
+          .toList(),
+      TransactionType.expense,
+    );
     final averageDailyExpense = now.day == 0 ? 0 : (expense / now.day).round();
 
     return SafeArea(
@@ -3104,6 +3812,7 @@ class HomePage extends StatelessWidget {
                   pendingPaymentCount: pendingPaymentCount,
                   onNotificationsPressed: onNotificationsPressed,
                   onSettingsPressed: onSettingsPressed,
+                  syncLabel: syncLabel,
                 ),
                 const SizedBox(height: 22),
                 _SummaryCard(
@@ -3114,6 +3823,16 @@ class HomePage extends StatelessWidget {
                 if (monthlyBudget > 0) ...[
                   const SizedBox(height: 14),
                   BudgetProgressCard(expense: expense, budget: monthlyBudget),
+                ],
+                if (monthlyBudget > 0 || categoryBudgets.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  FinancialCoachCard(
+                    transactions: monthlyTransactions,
+                    monthlyBudget: monthlyBudget,
+                    categoryBudgets: categoryBudgets,
+                    monthlySavingsGoal: monthlySavingsGoal,
+                    dayOfMonth: now.day,
+                  ),
                 ],
                 const SizedBox(height: 14),
                 Row(
@@ -3188,11 +3907,13 @@ class _HomeHeader extends StatelessWidget {
     required this.pendingPaymentCount,
     required this.onNotificationsPressed,
     required this.onSettingsPressed,
+    required this.syncLabel,
   });
 
   final int pendingPaymentCount;
   final VoidCallback onNotificationsPressed;
   final VoidCallback onSettingsPressed;
+  final String syncLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -3219,18 +3940,40 @@ class _HomeHeader extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              const Text(
                 '우리 가계부',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
               ),
-              SizedBox(height: 2),
-              Text(
-                '알콩달콩 모으고, 함께 확인해요 ♥',
-                style: TextStyle(color: Color(0xFF6B7280)),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: syncLabel == '동기화됨'
+                          ? AppColors.mint
+                          : syncLabel == '저장 중'
+                          ? Colors.orange
+                          : AppColors.muted,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      syncLabel,
+                      style: const TextStyle(
+                        color: Color(0xFF6B7280),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -3369,6 +4112,191 @@ class BudgetProgressCard extends StatelessWidget {
               color: color,
               backgroundColor: color.withValues(alpha: 0.1),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class FinancialCoachCard extends StatelessWidget {
+  const FinancialCoachCard({
+    super.key,
+    required this.transactions,
+    required this.monthlyBudget,
+    required this.categoryBudgets,
+    required this.monthlySavingsGoal,
+    required this.dayOfMonth,
+  });
+
+  final List<BudgetTransaction> transactions;
+  final int monthlyBudget;
+  final Map<String, int> categoryBudgets;
+  final int monthlySavingsGoal;
+  final int dayOfMonth;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final lastDay = DateTime(now.year, now.month + 1, 0).day;
+    final expense = totalForType(transactions, TransactionType.expense);
+    final income = totalForType(transactions, TransactionType.income);
+    final projected = dayOfMonth <= 0
+        ? expense
+        : (expense / dayOfMonth * lastDay).round();
+    final remainingDays = lastDay - dayOfMonth + 1;
+    final remainingBudget = monthlyBudget - expense;
+    final dailyAvailable = monthlyBudget <= 0 || remainingBudget <= 0
+        ? 0
+        : (remainingBudget / remainingDays).floor();
+    final saved = income - expense > 0 ? income - expense : 0;
+    final budgetRatio = monthlyBudget <= 0 ? 0.0 : expense / monthlyBudget;
+    final categoryTotals = <String, int>{};
+    for (final item in transactions.where(
+      (item) => item.type == TransactionType.expense && !item.isRefund,
+    )) {
+      categoryTotals.update(
+        item.category,
+        (value) => value + item.amount,
+        ifAbsent: () => item.amount,
+      );
+    }
+    final watchedCategories =
+        categoryBudgets.entries.where((entry) => entry.value > 0).toList()
+          ..sort((a, b) {
+            final first = (categoryTotals[a.key] ?? 0) / a.value;
+            final second = (categoryTotals[b.key] ?? 0) / b.value;
+            return second.compareTo(first);
+          });
+    final message = budgetRatio <= 0.5
+        ? '지금 흐름 아주 좋아요. 차분하게 잘 지키고 있어요 ✨'
+        : budgetRatio <= 0.8
+        ? '조금만 더 천천히 쓰면 이번 달 목표를 지킬 수 있어요.'
+        : '남은 기간에는 꼭 필요한 지출부터 확인해 봐요.';
+
+    return Container(
+      padding: const EdgeInsets.all(17),
+      decoration: softCardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Text('🌷', style: TextStyle(fontSize: 23)),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _CoachMetric(
+                  label: '하루 권장 지출',
+                  value: '${formatWon(dailyAvailable)}원',
+                  icon: Icons.today_rounded,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _CoachMetric(
+                  label: '월말 예상 지출',
+                  value: '${formatWon(projected)}원',
+                  icon: Icons.auto_graph_rounded,
+                ),
+              ),
+            ],
+          ),
+          if (monthlySavingsGoal > 0) ...[
+            const SizedBox(height: 14),
+            Text(
+              '저축 목표 ${formatWon(saved)} / ${formatWon(monthlySavingsGoal)}원',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 7),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: (saved / monthlySavingsGoal).clamp(0, 1),
+                minHeight: 7,
+                color: AppColors.mint,
+                backgroundColor: AppColors.mint.withValues(alpha: 0.12),
+              ),
+            ),
+          ],
+          if (watchedCategories.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            ...watchedCategories.take(3).map((entry) {
+              final used = categoryTotals[entry.key] ?? 0;
+              final ratio = used / entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(top: 7),
+                child: Row(
+                  children: [
+                    Icon(categoryIcon(entry.key), size: 17),
+                    const SizedBox(width: 7),
+                    Expanded(child: Text(entry.key)),
+                    Text(
+                      '${formatWon(used)} / ${formatWon(entry.value)}원',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: ratio >= 1 ? AppColors.coral : AppColors.muted,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CoachMetric extends StatelessWidget {
+  const _CoachMetric({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(15),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(height: 7),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, color: AppColors.muted),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w900),
           ),
         ],
       ),
@@ -3601,6 +4529,8 @@ class _TransactionsPageState extends State<TransactionsPage> {
   String? _filterCategory;
   int? _minimumAmount;
   int? _maximumAmount;
+  bool _calendarView = false;
+  DateTime? _selectedCalendarDay;
 
   bool get _hasDetailedFilter =>
       _filterType != null ||
@@ -3790,6 +4720,19 @@ class _TransactionsPageState extends State<TransactionsPage> {
                   '${monthlyTransactions.length}건',
                   style: const TextStyle(color: Color(0xFF6B7280)),
                 ),
+                const SizedBox(width: 6),
+                IconButton.filledTonal(
+                  onPressed: () => setState(() {
+                    _calendarView = !_calendarView;
+                    _selectedCalendarDay ??= DateTime.now();
+                  }),
+                  icon: Icon(
+                    _calendarView
+                        ? Icons.view_agenda_outlined
+                        : Icons.calendar_month_rounded,
+                  ),
+                  tooltip: _calendarView ? '목록으로 보기' : '달력으로 보기',
+                ),
               ],
             ),
           ),
@@ -3849,6 +4792,15 @@ class _TransactionsPageState extends State<TransactionsPage> {
           Expanded(
             child: widget.isLoading
                 ? const Center(child: CircularProgressIndicator())
+                : _calendarView
+                ? CalendarTransactionsView(
+                    month: _selectedMonth,
+                    transactions: monthlyTransactions,
+                    selectedDay: _selectedCalendarDay,
+                    onDaySelected: (day) =>
+                        setState(() => _selectedCalendarDay = day),
+                    onTransactionTap: widget.onTransactionTap,
+                  )
                 : groups.isEmpty
                 ? const Padding(
                     padding: EdgeInsets.all(20),
@@ -3860,9 +4812,10 @@ class _TransactionsPageState extends State<TransactionsPage> {
                     itemBuilder: (context, index) {
                       final day = groups.keys.elementAt(index);
                       final dayTransactions = groups[day]!;
-                      final dayExpense = dayTransactions
-                          .where((item) => item.type == TransactionType.expense)
-                          .fold<int>(0, (total, item) => total + item.amount);
+                      final dayExpense = totalForType(
+                        dayTransactions,
+                        TransactionType.expense,
+                      );
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 20),
                         child: Column(
@@ -3921,6 +4874,164 @@ class _TransactionsPageState extends State<TransactionsPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class CalendarTransactionsView extends StatelessWidget {
+  const CalendarTransactionsView({
+    super.key,
+    required this.month,
+    required this.transactions,
+    required this.selectedDay,
+    required this.onDaySelected,
+    required this.onTransactionTap,
+  });
+
+  final DateTime month;
+  final List<BudgetTransaction> transactions;
+  final DateTime? selectedDay;
+  final ValueChanged<DateTime> onDaySelected;
+  final ValueChanged<BudgetTransaction> onTransactionTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final first = DateTime(month.year, month.month);
+    final days = DateTime(month.year, month.month + 1, 0).day;
+    final leading = first.weekday - 1;
+    final rows = ((leading + days) / 7).ceil();
+    final selected = selectedDay != null && isSameMonth(selectedDay!, month)
+        ? selectedDay!
+        : first;
+    final byDay = <int, List<BudgetTransaction>>{};
+    for (final item in transactions) {
+      byDay.putIfAbsent(item.date.day, () => []).add(item);
+    }
+    final selectedTransactions = byDay[selected.day] ?? const [];
+    const weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: softCardDecoration(),
+            child: Column(
+              children: [
+                Row(
+                  children: weekdays
+                      .map(
+                        (label) => Expanded(
+                          child: Text(
+                            label,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+                const SizedBox(height: 5),
+                SizedBox(
+                  height: rows * 48,
+                  child: GridView.builder(
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 7,
+                        ),
+                    itemCount: leading + days,
+                    itemBuilder: (context, index) {
+                      if (index < leading) return const SizedBox.shrink();
+                      final day = index - leading + 1;
+                      final date = DateTime(month.year, month.month, day);
+                      final isSelected = selected.day == day;
+                      final items = byDay[day] ?? const [];
+                      final expense = totalForType(
+                        items.cast<BudgetTransaction>(),
+                        TransactionType.expense,
+                      );
+                      return InkWell(
+                        onTap: () => onDaySelected(date),
+                        borderRadius: BorderRadius.circular(13),
+                        child: Container(
+                          margin: const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? Theme.of(context).colorScheme.primary
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(13),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                '$day',
+                                style: TextStyle(
+                                  color: isSelected
+                                      ? Colors.white
+                                      : AppColors.ink,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              if (items.isNotEmpty)
+                                Container(
+                                  width: 5,
+                                  height: 5,
+                                  margin: const EdgeInsets.only(top: 3),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? Colors.white
+                                        : expense > 0
+                                        ? AppColors.coral
+                                        : AppColors.mint,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(22, 14, 22, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              formatDayHeader(selected),
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ),
+        Expanded(
+          child: selectedTransactions.isEmpty
+              ? const Center(child: Text('이날은 기록된 내역이 없어요.'))
+              : ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
+                  itemCount: selectedTransactions.length,
+                  itemBuilder: (context, index) {
+                    final item = selectedTransactions[index];
+                    return TransactionTile(
+                      transaction: item,
+                      showDate: false,
+                      onTap: () => onTransactionTap(item),
+                    );
+                  },
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                ),
+        ),
+      ],
     );
   }
 }
@@ -4075,7 +5186,9 @@ class _StatisticsPageState extends State<StatisticsPage> {
                         title: '지출 분류',
                         transactions: current
                             .where(
-                              (item) => item.type == TransactionType.expense,
+                              (item) =>
+                                  item.type == TransactionType.expense &&
+                                  !item.isRefund,
                             )
                             .toList(),
                         color: AppColors.coral,
@@ -4326,7 +5439,11 @@ class TransactionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isExpense = transaction.type == TransactionType.expense;
-    final color = isExpense ? AppColors.coral : AppColors.mint;
+    final color = transaction.isRefund
+        ? AppColors.lavender
+        : isExpense
+        ? AppColors.coral
+        : AppColors.mint;
     final icon = categoryIcon(transaction.category);
 
     return Card(
@@ -4374,10 +5491,12 @@ class TransactionTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      showDate
-                          ? '${transaction.category} · '
-                                '${formatDate(transaction.date)}'
-                          : transaction.category,
+                      [
+                        transaction.category,
+                        if (showDate) formatDate(transaction.date),
+                        if (transaction.sourceApp.isNotEmpty)
+                          transaction.sourceApp,
+                      ].join(' · '),
                       style: const TextStyle(
                         color: Color(0xFF9CA3AF),
                         fontSize: 13,
@@ -4391,7 +5510,8 @@ class TransactionTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '${isExpense ? '-' : '+'}${formatWon(transaction.amount)}원',
+                    '${transaction.isRefund || !isExpense ? '+' : '-'}'
+                    '${formatWon(transaction.amount)}원',
                     style: TextStyle(
                       color: color,
                       fontSize: 15,
@@ -4929,9 +6049,14 @@ class _TrashPageState extends State<TrashPage> {
 }
 
 class AppPinUnlockPage extends StatefulWidget {
-  const AppPinUnlockPage({super.key, required this.onUnlocked});
+  const AppPinUnlockPage({
+    super.key,
+    required this.onUnlocked,
+    required this.biometricEnabled,
+  });
 
   final VoidCallback onUnlocked;
+  final bool biometricEnabled;
 
   @override
   State<AppPinUnlockPage> createState() => _AppPinUnlockPageState();
@@ -4941,15 +6066,29 @@ class _AppPinUnlockPageState extends State<AppPinUnlockPage> {
   final _controller = TextEditingController();
   bool _checking = false;
   String? _error;
+  int _failedAttempts = 0;
+  DateTime? _lockedUntil;
+  Timer? _lockTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.biometricEnabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _useBiometric());
+    }
+  }
 
   @override
   void dispose() {
     _controller.dispose();
+    _lockTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _unlock() async {
-    if (_controller.text.length != 4 || _checking) return;
+    if (_controller.text.length != 4 || _checking || _isTemporarilyLocked) {
+      return;
+    }
     setState(() {
       _checking = true;
       _error = null;
@@ -4959,12 +6098,46 @@ class _AppPinUnlockPageState extends State<AppPinUnlockPage> {
     if (verified) {
       widget.onUnlocked();
     } else {
+      _failedAttempts++;
+      if (_failedAttempts >= 5) {
+        _lockedUntil = DateTime.now().add(const Duration(seconds: 30));
+        _lockTimer?.cancel();
+        _lockTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          if (!mounted) return;
+          if (!_isTemporarilyLocked) {
+            timer.cancel();
+            setState(() {
+              _failedAttempts = 0;
+              _lockedUntil = null;
+              _error = null;
+            });
+          } else {
+            setState(() {});
+          }
+        });
+      }
       setState(() {
         _checking = false;
-        _error = 'PIN 번호가 맞지 않습니다.';
+        _error = _isTemporarilyLocked
+            ? '입력 횟수가 많아요. 30초 후 다시 시도해 주세요.'
+            : 'PIN 번호가 맞지 않습니다. (${5 - _failedAttempts}회 남음)';
         _controller.clear();
       });
     }
+  }
+
+  bool get _isTemporarilyLocked =>
+      _lockedUntil != null && DateTime.now().isBefore(_lockedUntil!);
+
+  int get _remainingLockSeconds {
+    if (!_isTemporarilyLocked) return 0;
+    return _lockedUntil!.difference(DateTime.now()).inSeconds + 1;
+  }
+
+  Future<void> _useBiometric() async {
+    if (_checking || _isTemporarilyLocked) return;
+    final verified = await AppSettingsService.authenticateBiometric();
+    if (verified && mounted) widget.onUnlocked();
   }
 
   @override
@@ -5035,6 +6208,19 @@ class _AppPinUnlockPageState extends State<AppPinUnlockPage> {
                         style: const TextStyle(color: AppColors.coral),
                       ),
                     ],
+                    if (_isTemporarilyLocked)
+                      Text(
+                        '$_remainingLockSeconds초 남음',
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    if (widget.biometricEnabled) ...[
+                      const SizedBox(height: 14),
+                      OutlinedButton.icon(
+                        onPressed: _isTemporarilyLocked ? null : _useBiometric,
+                        icon: const Icon(Icons.fingerprint_rounded),
+                        label: const Text('지문·얼굴로 열기'),
+                      ),
+                    ],
                     if (_checking) ...[
                       const SizedBox(height: 14),
                       const CircularProgressIndicator(),
@@ -5054,27 +6240,41 @@ class AdvancedSettingsPage extends StatefulWidget {
   const AdvancedSettingsPage({
     super.key,
     required this.monthlyBudget,
+    required this.categoryBudgets,
+    required this.monthlySavingsGoal,
     required this.recurringRules,
     required this.expenseCategories,
     required this.incomeCategories,
     required this.onSaveAutomation,
     required this.onExportCsv,
+    required this.onExportCsvRange,
     required this.onImportCsv,
+    required this.onExportFullBackup,
+    required this.onImportFullBackup,
     required this.onLockChanged,
+    required this.onBiometricChanged,
   });
 
   final int monthlyBudget;
+  final Map<String, int> categoryBudgets;
+  final int monthlySavingsGoal;
   final List<RecurringTransactionRule> recurringRules;
   final List<String> expenseCategories;
   final List<String> incomeCategories;
   final Future<void> Function({
     required int monthlyBudget,
+    required Map<String, int> categoryBudgets,
+    required int monthlySavingsGoal,
     required List<RecurringTransactionRule> recurringRules,
   })
   onSaveAutomation;
   final Future<void> Function() onExportCsv;
+  final Future<void> Function() onExportCsvRange;
   final Future<void> Function() onImportCsv;
+  final Future<void> Function() onExportFullBackup;
+  final Future<void> Function() onImportFullBackup;
   final ValueChanged<bool> onLockChanged;
+  final ValueChanged<bool> onBiometricChanged;
 
   @override
   State<AdvancedSettingsPage> createState() => _AdvancedSettingsPageState();
@@ -5082,10 +6282,14 @@ class AdvancedSettingsPage extends StatefulWidget {
 
 class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
   late final TextEditingController _budgetController;
+  late final TextEditingController _savingsGoalController;
+  late Map<String, int> _categoryBudgets;
   late List<RecurringTransactionRule> _rules;
   List<NotificationAppOption> _notificationApps = [];
   bool _loadingApps = true;
   bool _pinEnabled = false;
+  bool _biometricAvailable = false;
+  bool _biometricEnabled = false;
   bool _saving = false;
 
   @override
@@ -5094,6 +6298,12 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
     _budgetController = TextEditingController(
       text: widget.monthlyBudget > 0 ? formatWon(widget.monthlyBudget) : '',
     );
+    _savingsGoalController = TextEditingController(
+      text: widget.monthlySavingsGoal > 0
+          ? formatWon(widget.monthlySavingsGoal)
+          : '',
+    );
+    _categoryBudgets = {...widget.categoryBudgets};
     _rules = [...widget.recurringRules];
     _loadDeviceSettings();
   }
@@ -5103,11 +6313,15 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
       final results = await Future.wait([
         AppSettingsService.getObservedNotificationApps(),
         AppSettingsService.hasAppPin(),
+        AppSettingsService.hasBiometric(),
+        AppSettingsService.getBiometricEnabled(),
       ]);
       if (mounted) {
         setState(() {
           _notificationApps = results[0] as List<NotificationAppOption>;
           _pinEnabled = results[1] as bool;
+          _biometricAvailable = results[2] as bool;
+          _biometricEnabled = results[3] as bool;
           _loadingApps = false;
         });
       }
@@ -5119,6 +6333,7 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
   @override
   void dispose() {
     _budgetController.dispose();
+    _savingsGoalController.dispose();
     super.dispose();
   }
 
@@ -5134,6 +6349,85 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
       ),
     );
     if (transaction == null || !mounted) return;
+    var cycle = RepeatCycle.monthly;
+    var confirmBeforeAdding = false;
+    var variableAmount = false;
+    DateTime? endDate;
+    final configured = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('반복 방법 선택'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<RepeatCycle>(
+                initialValue: cycle,
+                decoration: const InputDecoration(labelText: '반복 주기'),
+                items: RepeatCycle.values
+                    .map(
+                      (item) => DropdownMenuItem(
+                        value: item,
+                        child: Text(item.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => cycle = value);
+                },
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: confirmBeforeAdding,
+                onChanged: (value) =>
+                    setDialogState(() => confirmBeforeAdding = value),
+                title: const Text('등록 전 확인'),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: variableAmount,
+                onChanged: (value) =>
+                    setDialogState(() => variableAmount = value),
+                title: const Text('매번 금액이 달라요'),
+                subtitle: const Text('등록할 때 금액을 확인합니다.'),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('반복 종료일'),
+                subtitle: Text(
+                  endDate == null ? '종료일 없음' : formatFullDate(endDate!),
+                ),
+                trailing: const Icon(Icons.calendar_month_rounded),
+                onTap: () async {
+                  final selected = await showDatePicker(
+                    context: context,
+                    initialDate:
+                        endDate ??
+                        DateTime.now().add(const Duration(days: 365)),
+                    firstDate: DateTime.now(),
+                    lastDate: DateTime.now().add(const Duration(days: 3650)),
+                  );
+                  if (selected != null) {
+                    setDialogState(() => endDate = selected);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('추가'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (configured != true || !mounted) return;
     setState(() {
       _rules.add(
         RecurringTransactionRule(
@@ -5143,7 +6437,13 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
           amount: transaction.amount,
           type: transaction.type,
           day: transaction.date.day,
+          month: transaction.date.month,
+          weekday: transaction.date.weekday,
           memo: transaction.memo,
+          cycle: cycle,
+          endDate: endDate,
+          confirmBeforeAdding: confirmBeforeAdding || variableAmount,
+          variableAmount: variableAmount,
         ),
       );
     });
@@ -5215,8 +6515,8 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
         ),
       ),
     );
-    pinController.dispose();
-    confirmController.dispose();
+    disposeControllerAfterDialog(pinController);
+    disposeControllerAfterDialog(confirmController);
     return pin;
   }
 
@@ -5240,6 +6540,23 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
     if (mounted) {
       setState(() => _pinEnabled = enabled);
       widget.onLockChanged(enabled);
+      if (!enabled) {
+        setState(() => _biometricEnabled = false);
+        widget.onBiometricChanged(false);
+      }
+    }
+  }
+
+  Future<void> _toggleBiometric(bool enabled) async {
+    if (!_pinEnabled) return;
+    if (enabled) {
+      final verified = await AppSettingsService.authenticateBiometric();
+      if (!verified) return;
+    }
+    await AppSettingsService.setBiometricEnabled(enabled);
+    if (mounted) {
+      setState(() => _biometricEnabled = enabled);
+      widget.onBiometricChanged(enabled);
     }
   }
 
@@ -5266,6 +6583,12 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
       await widget.onSaveAutomation(
         monthlyBudget:
             int.tryParse(_budgetController.text.replaceAll(',', '')) ?? 0,
+        categoryBudgets: {
+          for (final entry in _categoryBudgets.entries)
+            if (entry.value > 0) entry.key: entry.value,
+        },
+        monthlySavingsGoal:
+            int.tryParse(_savingsGoalController.text.replaceAll(',', '')) ?? 0,
         recurringRules: _rules,
       );
       if (mounted) Navigator.of(context).pop();
@@ -5380,6 +6703,50 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
             ),
             const SizedBox(height: 12),
             _section(
+              title: '분류별 예산과 저축 목표',
+              icon: Icons.track_changes_rounded,
+              children: [
+                TextField(
+                  controller: _savingsGoalController,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [WonAmountInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: '이번 달 저축 목표',
+                    suffixText: '원',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ...widget.expenseCategories
+                    .where((category) => category != '환불')
+                    .map(
+                      (category) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: TextFormField(
+                          initialValue: _categoryBudgets[category] == null
+                              ? ''
+                              : formatWon(_categoryBudgets[category]!),
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [WonAmountInputFormatter()],
+                          onChanged: (value) {
+                            _categoryBudgets[category] =
+                                int.tryParse(value.replaceAll(',', '')) ?? 0;
+                          },
+                          decoration: InputDecoration(
+                            labelText: '$category 예산',
+                            prefixIcon: Icon(categoryIcon(category)),
+                            suffixText: '원',
+                          ),
+                        ),
+                      ),
+                    ),
+                const Text(
+                  '홈에서 하루 권장 지출, 월말 예상 지출과 분류별 사용량을 보여드려요.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 11),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _section(
               title: '반복 내역',
               icon: Icons.event_repeat_rounded,
               children: [
@@ -5406,6 +6773,12 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
                             day: rule.day,
                             memo: rule.memo,
                             enabled: enabled,
+                            cycle: rule.cycle,
+                            month: rule.month,
+                            weekday: rule.weekday,
+                            endDate: rule.endDate,
+                            confirmBeforeAdding: rule.confirmBeforeAdding,
+                            variableAmount: rule.variableAmount,
                           );
                         });
                       },
@@ -5414,7 +6787,14 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
                         style: const TextStyle(fontWeight: FontWeight.w800),
                       ),
                       subtitle: Text(
-                        '매월 ${rule.day}일 · ${formatWon(rule.amount)}원 · ${rule.category}',
+                        '${rule.cycle.label} '
+                        '${rule.cycle == RepeatCycle.weekly
+                            ? '${const ['월', '화', '수', '목', '금', '토', '일'][rule.weekday - 1]}요일'
+                            : rule.cycle == RepeatCycle.yearly
+                            ? '${rule.month}/${rule.day}'
+                            : '${rule.day}일'}'
+                        ' · ${formatWon(rule.amount)}원 · ${rule.category}'
+                        '${rule.confirmBeforeAdding ? ' · 확인 후 등록' : ''}',
                       ),
                       secondary: IconButton(
                         onPressed: () => setState(() => _rules.removeAt(index)),
@@ -5477,11 +6857,19 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
                   title: const Text('4자리 PIN 잠금'),
                   subtitle: const Text('앱을 다시 열 때 가계부를 보호합니다.'),
                 ),
+                if (_biometricAvailable)
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _biometricEnabled && _pinEnabled,
+                    onChanged: _pinEnabled ? _toggleBiometric : null,
+                    title: const Text('지문·얼굴로 잠금 해제'),
+                    subtitle: const Text('PIN을 먼저 설정한 후 사용할 수 있어요.'),
+                  ),
               ],
             ),
             const SizedBox(height: 12),
             _section(
-              title: 'CSV 파일 백업',
+              title: '파일 백업과 복원',
               icon: Icons.folder_copy_outlined,
               children: [
                 Row(
@@ -5502,6 +6890,37 @@ class _AdvancedSettingsPageState extends State<AdvancedSettingsPage> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onExportCsvRange,
+                        icon: const Icon(Icons.date_range_rounded),
+                        label: const Text('기간 선택 CSV'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onExportFullBackup,
+                        icon: const Icon(Icons.inventory_2_outlined),
+                        label: const Text('전체 백업'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                FilledButton.tonalIcon(
+                  onPressed: widget.onImportFullBackup,
+                  icon: const Icon(Icons.settings_backup_restore_rounded),
+                  label: const Text('전체 백업 파일 복원'),
+                ),
+                const SizedBox(height: 7),
+                const Text(
+                  '파일 선택 화면에서 Google Drive를 고르면 Drive에 바로 저장할 수 있어요.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 11),
                 ),
               ],
             ),
@@ -5537,6 +6956,11 @@ class TogetherPage extends StatefulWidget {
     required this.ledgerId,
     required this.ledgerName,
     required this.memberEmails,
+    required this.memberIds,
+    required this.transactions,
+    required this.currentUserId,
+    required this.ledgerColorKey,
+    required this.onUpdateLedgerAppearance,
   });
 
   final User user;
@@ -5550,6 +6974,12 @@ class TogetherPage extends StatefulWidget {
   final String ledgerId;
   final String ledgerName;
   final List<String> memberEmails;
+  final List<String> memberIds;
+  final List<BudgetTransaction> transactions;
+  final String currentUserId;
+  final String ledgerColorKey;
+  final Future<void> Function(String name, String colorKey)
+  onUpdateLedgerAppearance;
 
   @override
   State<TogetherPage> createState() => _TogetherPageState();
@@ -5563,6 +6993,61 @@ class _TogetherPageState extends State<TogetherPage> {
   bool get _hasSharedLedger =>
       widget.availableLedgers.any((ledger) => ledger.isShared);
   String get _inviteCode => widget.user.uid.substring(0, 8).toUpperCase();
+
+  Future<void> _editLedgerAppearance() async {
+    final controller = TextEditingController(text: widget.ledgerName);
+    var colorKey = widget.ledgerColorKey;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('공동 가계부 꾸미기'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                maxLength: 30,
+                decoration: const InputDecoration(labelText: '가계부 이름'),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 9,
+                children: AppThemeChoice.values.map((choice) {
+                  return ChoiceChip(
+                    selected: colorKey == choice.name,
+                    avatar: CircleAvatar(backgroundColor: choice.color),
+                    label: Text(choice.label),
+                    onSelected: (_) =>
+                        setDialogState(() => colorKey = choice.name),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('저장'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final name = controller.text;
+    disposeControllerAfterDialog(controller);
+    if (saved != true || name.trim().isEmpty) return;
+    try {
+      await widget.onUpdateLedgerAppearance(name, colorKey);
+      _showMessage('공동 가계부를 예쁘게 꾸몄어요.');
+    } on FirebaseException catch (error) {
+      _showMessage(_firestoreErrorMessage(error));
+    }
+  }
 
   void _showMessage(String message) {
     if (!mounted) {
@@ -5685,7 +7170,7 @@ class _TogetherPageState extends State<TogetherPage> {
         ],
       ),
     );
-    controller.dispose();
+    disposeControllerAfterDialog(controller);
 
     if (code != null) {
       await _sendInvitation(code);
@@ -6010,6 +7495,12 @@ class _TogetherPageState extends State<TogetherPage> {
     final partnerName = partnerEmails.isEmpty
         ? '상대방'
         : partnerEmails.join(', ');
+    final ledgerAccent = AppThemeChoice.values
+        .firstWhere(
+          (choice) => choice.name == widget.ledgerColorKey,
+          orElse: () => AppThemeChoice.pink,
+        )
+        .color;
 
     return SafeArea(
       child: Padding(
@@ -6124,7 +7615,18 @@ class _TogetherPageState extends State<TogetherPage> {
                           width: 76,
                           height: 76,
                           decoration: BoxDecoration(
-                            gradient: appGradient,
+                            gradient: _isShared
+                                ? LinearGradient(
+                                    colors: [
+                                      ledgerAccent,
+                                      Color.lerp(
+                                        ledgerAccent,
+                                        Colors.white,
+                                        0.24,
+                                      )!,
+                                    ],
+                                  )
+                                : appGradient,
                             borderRadius: BorderRadius.circular(27),
                             boxShadow: const [
                               BoxShadow(
@@ -6171,12 +7673,29 @@ class _TogetherPageState extends State<TogetherPage> {
                         ),
                         if (_isShared) ...[
                           const SizedBox(height: 10),
-                          Text(
-                            widget.ledgerName,
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.w800,
-                            ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                widget.ledgerName,
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: _editLedgerAppearance,
+                                icon: const Icon(Icons.edit_rounded, size: 18),
+                                tooltip: '이름과 색상 변경',
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          SharedSettlementCard(
+                            transactions: widget.transactions,
+                            currentUserId: widget.currentUserId,
+                            memberIds: widget.memberIds,
+                            memberEmails: widget.memberEmails,
                           ),
                           const SizedBox(height: 14),
                           FilledButton.tonalIcon(
@@ -6334,6 +7853,95 @@ class _TogetherPageState extends State<TogetherPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class SharedSettlementCard extends StatelessWidget {
+  const SharedSettlementCard({
+    super.key,
+    required this.transactions,
+    required this.currentUserId,
+    required this.memberIds,
+    required this.memberEmails,
+  });
+
+  final List<BudgetTransaction> transactions;
+  final String currentUserId;
+  final List<String> memberIds;
+  final List<String> memberEmails;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final current = transactions.where(
+      (item) =>
+          isSameMonth(item.date, now) && item.type == TransactionType.expense,
+    );
+    var mine = 0;
+    var partner = 0;
+    for (final item in current) {
+      final signedAmount = item.isRefund ? -item.amount : item.amount;
+      if (item.createdBy == currentUserId || item.createdBy.isEmpty) {
+        mine += signedAmount;
+      } else {
+        partner += signedAmount;
+      }
+    }
+    final difference = (mine - partner).abs();
+    final settlement = (difference / 2).round();
+    final partnerIndex = memberIds.indexWhere((id) => id != currentUserId);
+    final partnerName = partnerIndex >= 0 && partnerIndex < memberEmails.length
+        ? memberEmails[partnerIndex].split('@').first
+        : '상대방';
+    final settlementText = difference < 100
+        ? '이번 달은 거의 똑같이 부담했어요.'
+        : mine > partner
+        ? '$partnerName 님이 나에게 ${formatWon(settlement)}원 보내면 반반이에요.'
+        : '내가 $partnerName 님에게 ${formatWon(settlement)}원 보내면 반반이에요.';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F3FF),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE5D9FF)),
+      ),
+      child: Column(
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.handshake_rounded, color: AppColors.lavender),
+              SizedBox(width: 8),
+              Text('이번 달 반반 정산', style: TextStyle(fontWeight: FontWeight.w900)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(child: Text('나 ${formatWon(mine)}원')),
+              Expanded(
+                child: Text(
+                  '$partnerName ${formatWon(partner)}원',
+                  textAlign: TextAlign.end,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Text(
+            settlementText,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFF624AA8),
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -6706,6 +8314,25 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
         type: _type,
         date: _date,
         memo: _memoController.text.trim(),
+        createdBy: widget.initialTransaction?.createdBy ?? '',
+        sourceApp:
+            widget.initialTransaction?.sourceApp ??
+            widget.initialDraft?.sourceApp ??
+            '',
+        installmentMonths:
+            widget.initialTransaction?.installmentMonths ??
+            widget.initialDraft?.installmentMonths,
+        recognitionConfidence:
+            widget.initialTransaction?.recognitionConfidence ??
+            widget.initialDraft?.confidence,
+        sourceMessageId:
+            widget.initialTransaction?.sourceMessageId ??
+            widget.initialDraft?.sourceMessageId ??
+            '',
+        isRefund:
+            widget.initialTransaction?.isRefund ??
+            widget.initialDraft?.isRefund ??
+            false,
       ),
     );
   }
@@ -6822,6 +8449,52 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                         ),
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 7,
+                    runSpacing: 7,
+                    children: [
+                      Chip(
+                        avatar: Icon(
+                          widget.initialDraft!.confidence >= 0.8
+                              ? Icons.verified_rounded
+                              : Icons.manage_search_rounded,
+                          size: 17,
+                        ),
+                        label: Text(
+                          widget.initialDraft!.confidence >= 0.8
+                              ? '인식 정확도 높음'
+                              : '한 번 더 확인 필요',
+                        ),
+                      ),
+                      if (widget.initialDraft!.sourceApp.isNotEmpty)
+                        Chip(
+                          avatar: const Icon(
+                            Icons.credit_card_rounded,
+                            size: 17,
+                          ),
+                          label: Text(widget.initialDraft!.sourceApp),
+                        ),
+                      if (widget.initialDraft!.installmentMonths != null)
+                        Chip(
+                          avatar: const Icon(
+                            Icons.calendar_view_month_rounded,
+                            size: 17,
+                          ),
+                          label: Text(
+                            '${widget.initialDraft!.installmentMonths}개월 할부',
+                          ),
+                        ),
+                      if (widget.initialDraft!.isRefund)
+                        const Chip(
+                          avatar: Icon(
+                            Icons.currency_exchange_rounded,
+                            size: 17,
+                          ),
+                          label: Text('취소·환불'),
+                        ),
+                    ],
                   ),
                   Align(
                     alignment: Alignment.centerRight,
@@ -7051,7 +8724,7 @@ String transactionsToCsv(List<BudgetTransaction> transactions) {
   final sorted = [...transactions]
     ..sort((first, second) => second.date.compareTo(first.date));
   final rows = <List<String>>[
-    ['날짜', '구분', '분류', '사용처', '금액', '메모'],
+    ['날짜', '구분', '분류', '사용처', '금액', '메모', '결제수단', '할부개월', '환불여부'],
     ...sorted.map(
       (item) => [
         '${item.date.year.toString().padLeft(4, '0')}-'
@@ -7062,6 +8735,9 @@ String transactionsToCsv(List<BudgetTransaction> transactions) {
         item.title,
         item.amount.toString(),
         item.memo,
+        item.sourceApp,
+        item.installmentMonths?.toString() ?? '',
+        item.isRefund ? '환불' : '',
       ],
     ),
   ];
@@ -7095,6 +8771,11 @@ List<BudgetTransaction> transactionsFromCsv(String content) {
       return index < row.length ? row[index].trim() : '';
     }
 
+    String optionalCell(String header) {
+      final index = headers.indexOf(header);
+      return index >= 0 && index < row.length ? row[index].trim() : '';
+    }
+
     final date = DateTime.tryParse(cell('날짜'));
     final title = _restoreCsvFormulaValue(cell('사용처'));
     final amount = int.tryParse(cell('금액').replaceAll(RegExp(r'[^0-9-]'), ''));
@@ -7117,6 +8798,12 @@ List<BudgetTransaction> transactionsFromCsv(String content) {
         type: type,
         date: DateTime(date.year, date.month, date.day),
         memo: _restoreCsvFormulaValue(cell('메모')),
+        sourceApp: _restoreCsvFormulaValue(optionalCell('결제수단')),
+        installmentMonths: int.tryParse(optionalCell('할부개월')),
+        isRefund: optionalCell('환불여부') == '환불',
+        sourceMessageId: stableMessageId(
+          '${date.toIso8601String()}|$typeValue|$title|$amount|${cell('메모')}',
+        ),
       ),
     );
   }
@@ -7185,7 +8872,29 @@ String _csvCell(String value) {
 int totalForType(List<BudgetTransaction> transactions, TransactionType type) {
   return transactions
       .where((item) => item.type == type)
-      .fold<int>(0, (total, item) => total + item.amount);
+      .fold<int>(
+        0,
+        (total, item) =>
+            total +
+            (type == TransactionType.expense && item.isRefund
+                ? -item.amount
+                : item.amount),
+      );
+}
+
+String stableMessageId(String value) {
+  var hash = 0x811C9DC5;
+  for (final codeUnit in value.codeUnits) {
+    hash ^= codeUnit;
+    hash = (hash * 0x01000193) & 0xFFFFFFFF;
+  }
+  return hash.toRadixString(16).padLeft(8, '0');
+}
+
+void disposeControllerAfterDialog(TextEditingController controller) {
+  unawaited(
+    Future<void>.delayed(const Duration(milliseconds: 400), controller.dispose),
+  );
 }
 
 String percentageChange(int current, int previous) {

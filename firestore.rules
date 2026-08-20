@@ -45,7 +45,12 @@ service cloud.firestore {
           'importedFromLedgerId',
           'importedFromTransactionId',
           'importedBy',
-          'importedAt'
+          'importedAt',
+          'sourceApp',
+          'installmentMonths',
+          'recognitionConfidence',
+          'sourceMessageId',
+          'isRefund'
         ])
         && transaction.title is string
         && transaction.title.size() > 0
@@ -61,6 +66,20 @@ service cloud.firestore {
         && transaction.memo is string
         && transaction.memo.size() <= 5000
         && transaction.createdBy is string
+        && (!transaction.keys().hasAny(['sourceApp'])
+          || transaction.sourceApp is string)
+        && (!transaction.keys().hasAny(['installmentMonths'])
+          || (transaction.installmentMonths is int
+            && transaction.installmentMonths >= 2
+            && transaction.installmentMonths <= 60))
+        && (!transaction.keys().hasAny(['recognitionConfidence'])
+          || (transaction.recognitionConfidence is number
+            && transaction.recognitionConfidence >= 0
+            && transaction.recognitionConfidence <= 1))
+        && (!transaction.keys().hasAny(['sourceMessageId'])
+          || transaction.sourceMessageId is string)
+        && (!transaction.keys().hasAny(['isRefund'])
+          || transaction.isRefund is bool)
         && (!transaction.keys().hasAny(['deletedAt'])
           || transaction.deletedAt is timestamp)
         && (!transaction.keys().hasAny(['deletedBy'])
